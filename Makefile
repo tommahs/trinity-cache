@@ -4,6 +4,9 @@
 build:
 	go build ./...
 
+tidy:
+	go mod tidy
+
 docker:
 	docker build -t trinity-cache:dev .
 
