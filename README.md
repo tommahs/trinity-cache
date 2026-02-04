@@ -111,6 +111,17 @@ Planned usage:
 Trinity-cache --config config.yaml
 ```
 
+Local build and run (developer):
+
+```bash
+# build
+go build ./...
+
+# build and run docker image
+make docker
+docker run --rm trinity-cache:dev --version
+```
+
 # Why “Trinity-cache”?
 The name reflects the three pillars of the project:
 - Concurrent fetching
