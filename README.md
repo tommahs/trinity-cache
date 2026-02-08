@@ -69,11 +69,35 @@ Trinity-cache is built around three core principles:
 
 Trinity-cache uses a YAML configuration file.
 
-Example:
+## Configuration Schema
+
+Trinity-cache uses a formal configuration schema with validation for all parameters.
+
+### Configuration Options
+
+| Key | Type | Required | Default | Description |
+|-----|------|----------|---------|-------------|
+| `concurrency` | integer | Optional | 8 | Maximum number of concurrent downloads. Must be between 1 and 10000. |
+| `storage_path` | string | Required | - | File system path where cached packages are stored. |
+| `mirrors` | array | Required | - | List of mirror definitions (at least one required). |
+| `mirrors[].url` | string | Required | - | Base URL of an Arch Linux mirror. |
+| `mirrors[].weight` | float | Optional | 1.0 | Initial base weight for the mirror. Must be positive. This value is dynamically adjusted at runtime based on mirror usage. |
+
+### Validation Rules
+
+All configuration values are validated on load:
+
+- **concurrency**: Must be a positive integer ≤ 10000
+- **storage_path**: Cannot be empty; must be provided or uses default
+- **mirrors**: At least one mirror is required
+- **mirrors[].url**: Cannot be empty for any mirror
+- **mirrors[].weight**: Must be positive (> 0); defaults to 1.0 if not specified
+
+### Example Configuration
 
 ```yaml
-concurrency: 8
-storage_path: "/var/lib/trinity-cache"
+concurrency: 8                           # Use up to 8 concurrent connections
+storage_path: "/var/lib/trinity-cache"   # Store packages here
 
 mirrors:
   - url: "https://mirror1.archlinux.org"
@@ -83,17 +107,8 @@ mirrors:
     weight: 1.0
 
   - url: "https://mirror3.archlinux.org"
-    weight: 1.0
+    weight: 1.5                         # Higher initial weight
 ```
-
-## Configuration Options
-* concurrency
-  Maximum number of concurrent downloads.
-* mirrors[].url
-  Base URL of an Arch Linux mirror.
-* mirrors[].weight
-  Initial base weight for the mirror.
-  This value is dynamically adjusted at runtime based on mirror usage.
 
 # Serving Packages
 Trinity-cache is intended to expose a local package-serving interface (e.g. HTTP).
