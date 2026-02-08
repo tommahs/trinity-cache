@@ -1,5 +1,5 @@
 # Simple Makefile for common dev tasks
-.PHONY: build tidy docker run clean
+.PHONY: build tidy docker run clean test
 
 bin := ./bin
 
@@ -7,6 +7,8 @@ build:
 	mkdir -p $(bin)
 	go build -o $(bin)/trinity-cache ./cmd/trinity-cache
 
+test:
+	go test -v ./...
 
 tidy:
 	go mod tidy
