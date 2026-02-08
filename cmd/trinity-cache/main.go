@@ -3,9 +3,11 @@ package main
 import (
 	"flag"
 	"fmt"
+	"log/slog"
 	"os"
 
 	"github.com/tommahs/trinity-cache/internal/config"
+	"github.com/tommahs/trinity-cache/internal/logger"
 	"github.com/tommahs/trinity-cache/internal/version"
 )
 
@@ -19,23 +21,32 @@ func main() {
 		os.Exit(0)
 	}
 
+	// Load configuration
 	var cfg *config.Config
 	var err error
 	if *configPath != "" {
 		cfg, err = config.Load(*configPath)
 		if err != nil {
-			fmt.Fprintln(os.Stderr, "config error:", err)
+			fmt.Fprintf(os.Stderr, "failed to load config: %v\n", err)
 			os.Exit(1)
 		}
-		fmt.Println("Using config:", *configPath)
 	} else {
 		cfg = config.Default()
-		fmt.Println("No config provided; using defaults")
 	}
+
+	// Configure logger based on loaded config
+	logger.SetLevel(logger.ParseLevel(cfg.LogLevel))
+
+	// Validate mirrors are configured
 	if len(cfg.Mirrors) == 0 {
-		fmt.Fprintln(os.Stderr, "config error: no mirrors configured")
+		logger.Error("no mirrors configured")
 		os.Exit(1)
 	}
-	fmt.Printf("Trinity-cache starting — version %s (concurrency=%d, storage=%s, mirrors=%d)\n",
-		version.Version, cfg.Concurrency, cfg.StoragePath, len(cfg.Mirrors))
+
+	// Log startup information
+	logger.Info("Trinity-cache started",
+		"version", version.Version,
+		"concurrency", cfg.Concurrency,
+		"storage", cfg.StoragePath,
+		"mirrors", len(cfg.Mirrors))
 }

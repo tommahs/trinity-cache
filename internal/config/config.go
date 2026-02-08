@@ -17,6 +17,7 @@ type MirrorConfig struct {
 type Config struct {
 	Concurrency int            `yaml:"concurrency" validate:"min=1,max=10000"`
 	StoragePath string         `yaml:"storage_path" validate:"required,dirpath"`
+	LogLevel    string         `yaml:"log_level" validate:"omitempty,oneof=debug info warn error"`
 	Mirrors     []MirrorConfig `yaml:"mirrors" validate:"required,min=1,dive"`
 }
 
@@ -50,6 +51,12 @@ func (c *Config) Validate() error {
 		}
 	}
 
+	// Validate log level
+	validLevels := map[string]bool{"debug": true, "info": true, "warn": true, "error": true}
+	if c.LogLevel != "" && !validLevels[c.LogLevel] {
+		return fmt.Errorf("invalid log level: %s (must be one of: debug, info, warn, error)", c.LogLevel)
+	}
+
 	return nil
 }
 
@@ -58,6 +65,7 @@ func Default() *Config {
 	return &Config{
 		Concurrency: 8,
 		StoragePath: "/var/lib/trinity-cache",
+		LogLevel:    "info",
 		Mirrors:     []MirrorConfig{},
 	}
 }
@@ -85,6 +93,9 @@ func Load(path string) (*Config, error) {
 	}
 	if c.StoragePath == "" {
 		c.StoragePath = "/var/lib/trinity-cache"
+	}
+	if c.LogLevel == "" {
+		c.LogLevel = "info"
 	}
 
 	// Set default weight for mirrors that don't have one
