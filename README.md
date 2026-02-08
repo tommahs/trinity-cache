@@ -73,7 +73,7 @@ Example:
 
 ```yaml
 concurrency: 8
-storage_path: "/var/lib/Trinity-cache"
+storage_path: "/var/lib/trinity-cache"
 
 mirrors:
   - url: "https://mirror1.archlinux.org"
@@ -108,7 +108,7 @@ Clients can request packages normally. Trinity-cache will:
 
 Planned usage:
 ```
-Trinity-cache --config config.yaml
+trinity-cache --config config.yaml
 ```
 
 Local build and run (developer):
