@@ -5,11 +5,12 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/tommahs/trinity-cache/internal/config"
 	"github.com/tommahs/trinity-cache/internal/version"
 )
 
 func main() {
-	config := flag.String("config", "", "Path to YAML config file")
+	configPath := flag.String("config", "", "Path to YAML config file")
 	showVersion := flag.Bool("version", false, "Show version")
 	flag.Parse()
 
