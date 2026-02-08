@@ -65,6 +65,55 @@ Trinity-cache is built around three core principles:
 
 ---
 
+## Mirror Model
+
+Trinity-cache implements a **dynamic mirror scheduling model** that tracks multiple aspects of each mirror to make intelligent selection decisions.
+
+### Mirror State Tracking
+
+Each mirror maintains the following state:
+
+- **Base Weight**: The initial weight configured in YAML. This value remains constant and serves as the baseline preference.
+- **Effective Weight**: The current weight dynamically adjusted at runtime. When a mirror is used, its effective weight is reduced (penalized) to discourage repeated use and promote load distribution across other mirrors.
+- **Recent Usage**: Tracked via a `LastUsed` timestamp, allowing the system to understand recent mirror activity patterns.
+- **In-Flight Downloads**: A counter of concurrent downloads currently using this mirror. This helps avoid overloading mirrors with too many simultaneous requests.
+
+### Mirror Selector
+
+The `Selector` interface defines the contract for mirror selection:
+
+```go
+// Select returns the best candidate mirror for the next download
+Select() (*Mirror, error)
+
+// Penalize reduces the effective weight of a mirror after use
+Penalize(m *Mirror, penalty float64)
+
+// Add registers a new mirror with the selector
+Add(m *Mirror)
+
+// List returns the currently known mirrors
+List() []*Mirror
+```
+
+Trinity-cache provides a `WeightedSelector` implementation that selects mirrors based on effective weight:
+
+- **Selection**: Chooses the mirror with the highest current effective weight. This ensures fair load distribution; recently used mirrors have reduced weights and are less likely to be selected again immediately.
+- **Penalization**: After a mirror is used, its effective weight is reduced by a configurable penalty. The weight never goes below zero and is restored over time (through the application's reconciliation logic, separate from the model).
+
+#### Workflow Example
+
+1. Three mirrors are configured with base weights: Mirror A (2.0), Mirror B (1.0), Mirror C (1.0). All start with effective weight equal to base weight.
+2. `Selector.Select()` chooses Mirror A (highest effective weight: 2.0).
+3. Mirror A is used; in-flight download counter increments.
+4. `Selector.Penalize(Mirror A, 1.5)` is called. Mirror A's effective weight becomes 0.5.
+5. Next `Selector.Select()` chooses Mirror B or C (effective weight 1.0 > 0.5).
+6. When downloads complete, in-flight counters are decremented.
+
+This model ensures **fair distribution** across mirrors while respecting configured base weights.
+
+---
+
 ## Configuration
 
 Trinity-cache uses a YAML configuration file.
