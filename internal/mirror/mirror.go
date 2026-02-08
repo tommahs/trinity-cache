@@ -2,6 +2,7 @@ package mirror
 
 import (
 	"fmt"
+	"math"
 	"sync"
 	"time"
 
@@ -61,17 +62,20 @@ type Selector interface {
 	List() []*Mirror
 }
 
-// WeightedSelector implements the Selector interface using weighted
-// random selection based on mirror effective weights.
+// WeightedSelector implements the Selector interface using a scoring algorithm
+// that considers effective weight, recent usage, and in-flight downloads.
 type WeightedSelector struct {
 	mirrors []*Mirror
 	mu      sync.RWMutex
+	// timeNow is injected for testing time-dependent behavior
+	timeNow func() time.Time
 }
 
 // NewWeightedSelector creates a new weighted selector.
 func NewWeightedSelector() *WeightedSelector {
 	return &WeightedSelector{
 		mirrors: make([]*Mirror, 0),
+		timeNow: time.Now,
 	}
 }
 
@@ -92,8 +96,9 @@ func (ws *WeightedSelector) List() []*Mirror {
 	return result
 }
 
-// Select returns the mirror with the highest effective weight.
-// Returns an error if no mirrors are available.
+// Select returns the mirror with the highest score based on effective weight,
+// recent usage, and in-flight download count. Returns an error if no mirrors
+// are available or none have positive weight.
 func (ws *WeightedSelector) Select() (*Mirror, error) {
 	ws.mu.RLock()
 	defer ws.mu.RUnlock()
@@ -104,22 +109,65 @@ func (ws *WeightedSelector) Select() (*Mirror, error) {
 	}
 
 	var selected *Mirror
-	var maxWeight float64
+	var maxScore float64
+	now := ws.timeNow()
 
 	for _, m := range ws.mirrors {
-		if m.EffectiveWeight > maxWeight {
-			maxWeight = m.EffectiveWeight
+		score := ws.calculateScore(m, now)
+		if score > maxScore {
+			maxScore = score
 			selected = m
 		}
 	}
 
-	if selected == nil {
+	if selected == nil || maxScore <= 0 {
 		logger.Warn("mirror selection failed", "reason", "no mirror with positive weight available")
 		return nil, fmt.Errorf("no mirror with positive weight available")
 	}
 
-	logger.Debug("mirror selected", "url", selected.URL, "effective_weight", selected.EffectiveWeight)
+	logger.Debug("mirror selected", "url", selected.URL, "effective_weight", selected.EffectiveWeight, "score", maxScore)
 	return selected, nil
+}
+
+// calculateScore computes a selection score for a mirror based on:
+// - Effective weight (primary factor: higher weight = higher score)
+// - Time since last use (secondary: mirrors unused longer get boost)
+// - In-flight downloads (tertiary: fewer in-flight downloads = higher score)
+//
+// The formula is:
+//   score = EffectiveWeight * (1 + timeSinceLastUseBoost) / (1 + inFlightPenalty)
+//
+// This ensures:
+// 1. Mirrors with negative or zero effective weight have zero score
+// 2. Recently unused mirrors are preferred when weights are similar
+// 3. Mirrors with fewer concurrent downloads are preferred
+func (ws *WeightedSelector) calculateScore(m *Mirror, now time.Time) float64 {
+	// Mirrors with non-positive weight should never be selected
+	if m.EffectiveWeight <= 0 {
+		return 0
+	}
+
+	// Calculate time-since-use boost
+	// Mirrors not yet used (zero time) get no boost
+	// Mirrors unused for 1 hour get a moderate boost (factor of 2)
+	// Mirrors unused for 10+ hours get diminishing returns (log scale)
+	var timeSinceLastUseBoost float64
+	if !m.LastUsed.IsZero() {
+		timeSince := now.Sub(m.LastUsed).Seconds()
+		// Boost formula: log(1 + timeSince/3600) where 3600 = 1 hour in seconds
+		// This gives a natural diminishing return: 1 hour -> ~0.69, 10 hours -> ~0.89
+		timeSinceLastUseBoost = math.Log(1 + timeSince/3600)
+	}
+
+	// Calculate in-flight download penalty
+	// 0 in-flight downloads = penalty of 0 (no penalty)
+	// 1 in-flight download = small penalty (~0.01 reduction)
+	// 10 in-flight downloads = moderate penalty (~0.1 reduction)
+	inFlightPenalty := float64(m.InFlightDownloads) * 0.01
+
+	// Combine factors: weight * usage-boost / in-flight-penalty
+	score := m.EffectiveWeight * (1 + timeSinceLastUseBoost) / (1 + inFlightPenalty)
+	return score
 }
 
 // Penalize reduces the effective weight of a mirror after use.

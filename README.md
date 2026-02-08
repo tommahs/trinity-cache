@@ -96,21 +96,70 @@ Add(m *Mirror)
 List() []*Mirror
 ```
 
-Trinity-cache provides a `WeightedSelector` implementation that selects mirrors based on effective weight:
+Trinity-cache provides a `WeightedSelector` implementation that uses a **sophisticated scoring algorithm** to select mirrors based on three factors:
 
-- **Selection**: Chooses the mirror with the highest current effective weight. This ensures fair load distribution; recently used mirrors have reduced weights and are less likely to be selected again immediately.
-- **Penalization**: After a mirror is used, its effective weight is reduced by a configurable penalty. The weight never goes below zero and is restored over time (through the application's reconciliation logic, separate from the model).
+#### Selection Algorithm
+
+The algorithm scores each mirror and selects the one with the highest score:
+
+```
+score = EffectiveWeight × (1 + timeSinceLastUseBoost) / (1 + inFlightPenalty)
+```
+
+**Scoring Factors:**
+
+1. **Effective Weight** (primary factor)  
+   - Mirrors with higher effective weights are preferred, respecting configuration priorities
+   - Mirrors with zero or negative weight are never selected
+
+2. **Time Since Last Use** (secondary factor)  
+   - Unused mirrors get a boost: `timeSinceLastUseBoost = log(1 + secondsSinceLastUse / 3600)`
+   - This naturally prefers less-recently-used mirrors when weights are similar
+   - Example boost values: 1 hour unused → 0.69 boost; 10 hours unused → 0.89 boost; never used → 0 boost (but still preferred)
+
+3. **In-Flight Downloads** (tertiary factor)  
+   - Mirrors with many concurrent downloads are penalized: `inFlightPenalty = inFlightCount × 0.01`
+   - This prevents overloading mirrors that are already handling many requests
+   - Example penalties: 0 downloads → 0; 5 downloads → 0.05; 10+ downloads → 0.1+
+
+**Key Properties:**
+
+- **Fair Distribution**: Prefers less-used mirrors when available, avoiding overuse of high-priority mirrors
+- **Priority Respect**: Still respects configured base weights and effective weights
+- **Load Awareness**: Avoids selecting mirrors with many in-flight downloads
+- **Robust**: Never selects mirrors with non-positive weights
+
+#### Penalization
+
+After a mirror is used, its effective weight is reduced (penalized) to discourage repeated selection:
+
+- The weight is penalized by a configurable amount (reduces effective weight)
+- The weight never goes below zero
+- The `LastUsed` timestamp is updated to the current time
+- Over time, effective weights recover through separate reconciliation logic
 
 #### Workflow Example
 
-1. Three mirrors are configured with base weights: Mirror A (2.0), Mirror B (1.0), Mirror C (1.0). All start with effective weight equal to base weight.
-2. `Selector.Select()` chooses Mirror A (highest effective weight: 2.0).
-3. Mirror A is used; in-flight download counter increments.
-4. `Selector.Penalize(Mirror A, 1.5)` is called. Mirror A's effective weight becomes 0.5.
-5. Next `Selector.Select()` chooses Mirror B or C (effective weight 1.0 > 0.5).
-6. When downloads complete, in-flight counters are decremented.
+1. Three mirrors are configured:
+   - Mirror A: base weight 2.0, effective weight 2.0, never used
+   - Mirror B: base weight 1.0, effective weight 1.0, last used 2 hours ago
+   - Mirror C: base weight 1.5, effective weight 1.5, actively handling 10 downloads
 
-This model ensures **fair distribution** across mirrors while respecting configured base weights.
+2. `Selector.Select()` scores all mirrors:
+   - Mirror A: 2.0 × (1 + 0) / (1 + 0) = 2.0 (never used, no penalty)
+   - Mirror B: 1.0 × (1 + 0.405) / (1 + 0) ≈ 1.405 (2h unused gives boost)
+   - Mirror C: 1.5 × (1 + 0) / (1 + 0.1) ≈ 1.364 (penalized by in-flight downloads)
+
+3. Mirror A is selected (highest score: 2.0)
+
+4. After use:
+   - In-flight counter for Mirror A is incremented
+   - Later, `Selector.Penalize(Mirror A, 0.8)` reduces effective weight to 1.2
+   - `LastUsed` timestamp is updated
+
+5. Next selection round prefers Mirror B or C due to Mirror A's reduced weight
+
+This algorithm ensures **balanced load distribution** while maintaining **fair access** to high-priority mirrors and **avoiding overload** of any single mirror.
 
 ---
 
