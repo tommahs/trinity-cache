@@ -79,6 +79,7 @@ Trinity-cache uses a formal configuration schema with validation for all paramet
 |-----|------|----------|---------|-------------|
 | `concurrency` | integer | Optional | 8 | Maximum number of concurrent downloads. Must be between 1 and 10000. |
 | `storage_path` | string | Required | - | File system path where cached packages are stored. |
+| `log_level` | string | Optional | info | Logging verbosity level. One of: `debug`, `info`, `warn`, `error`. |
 | `mirrors` | array | Required | - | List of mirror definitions (at least one required). |
 | `mirrors[].url` | string | Required | - | Base URL of an Arch Linux mirror. |
 | `mirrors[].weight` | float | Optional | 1.0 | Initial base weight for the mirror. Must be positive. This value is dynamically adjusted at runtime based on mirror usage. |
@@ -89,6 +90,7 @@ All configuration values are validated on load:
 
 - **concurrency**: Must be a positive integer ≤ 10000
 - **storage_path**: Cannot be empty; must be provided or uses default
+- **log_level**: Must be one of `debug`, `info`, `warn`, or `error`; defaults to `info` if not specified
 - **mirrors**: At least one mirror is required
 - **mirrors[].url**: Cannot be empty for any mirror
 - **mirrors[].weight**: Must be positive (> 0); defaults to 1.0 if not specified
@@ -98,6 +100,7 @@ All configuration values are validated on load:
 ```yaml
 concurrency: 8                           # Use up to 8 concurrent connections
 storage_path: "/var/lib/trinity-cache"   # Store packages here
+log_level: "info"                        # Log level: debug, info, warn, error
 
 mirrors:
   - url: "https://mirror1.archlinux.org"
@@ -110,7 +113,63 @@ mirrors:
     weight: 1.5                         # Higher initial weight
 ```
 
-# Serving Packages
+## Logging
+
+Trinity-cache provides **structured logging** based on Go's standard `log/slog` library. The philosophy follows Go's pragmatic approach: simple, explicit, and focused on what matters.
+
+### Log Levels
+
+The `log_level` configuration option controls verbosity (default: "info"):
+
+- **debug**: Detailed diagnostic information for troubleshooting.
+- **info**: Application startup, significant operations, and notable events.
+- **warn**: Recoverable issues and temporary failures.
+- **error**: Operation failures and serious problems.
+
+### Log Output
+
+Trinity-cache logs events as structured text. Each log entry includes a timestamp, level, message, and relevant attributes:
+
+```
+time=2026-02-08T10:15:22Z level=INFO msg="Trinity-cache started" version=0.1.0 concurrency=8 storage=/var/lib/trinity-cache mirrors=3
+time=2026-02-08T10:15:23Z level=ERROR msg="no mirrors configured"
+```
+
+### Logging Philosophy
+
+Following Go's ethos:
+- **Explicit errors**: Operations return errors; failures are not silently logged and swallowed.
+- **Minimal logging**: Log significant events and failures, not every internal detail.
+- **Standard library**: Uses Go's standard `log/slog` without external dependencies.
+- **Pragmatic**: Logging serves debugging and operations; unnecessary verbosity is avoided.
+
+### Logger API
+
+The logger package provides simple functions for structured logging:
+
+```go
+// Configure log level during startup
+logger.SetLevel(logger.ParseLevel(cfg.LogLevel))
+
+// Log messages at different levels
+logger.Debug("detailed diagnostic info", "key", value)
+logger.Info("significant event", "operation", "cache_loaded")
+logger.Warn("recoverable issue", "retry", 3)
+logger.Error("operation failed", "error", err)
+
+// Create a contextual logger with pre-set fields
+ctxLogger := logger.With("component", "downloader", "mirror", mirrorURL)
+ctxLogger.Info("download started")
+```
+
+**Functions:**
+- `SetLevel(level)` — Configure the log level (call during startup after config loads)
+- `ParseLevel(s string)` — Parse "debug", "info", "warn", "error" from config string
+- `Debug(msg, args...)` — Log at debug level
+- `Info(msg, args...)` — Log at info level
+- `Warn(msg, args...)` — Log at warn level
+- `Error(msg, args...)` — Log at error level
+- `With(args...)` — Return a contextual logger with pre-set key-value pairs
 Trinity-cache is intended to expose a local package-serving interface (e.g. HTTP).
 Clients can request packages normally. Trinity-cache will:
 1. Serve the package from cache if available.

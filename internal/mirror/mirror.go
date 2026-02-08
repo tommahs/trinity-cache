@@ -11,9 +11,12 @@ type Mirror struct {
 }
 
 // Selector selects mirrors for downloads and adjusts weights to
-// distribute load across mirrors.
+// distribute load across mirrors. Implementations should return errors
+// when selection fails; optional debug logging for decisions and info
+// logging when weights are adjusted.
 type Selector interface {
 	// Select returns the best candidate mirror for the next download.
+	// Return an error if no mirror is available.
 	Select() (*Mirror, error)
 
 	// Penalize reduces the effective weight of a mirror after use.

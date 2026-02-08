@@ -9,8 +9,11 @@ type Result struct {
 }
 
 // Downloader downloads packages from a given mirror.
+// Implementations should return errors explicitly. Info logging for
+// successful downloads and error logging for failures is recommended.
 type Downloader interface {
 	// Download downloads the package at pkgPath from the provided mirror.
 	// It returns a Result describing where the downloaded file is stored.
+	// Return errors for failures; log significant events.
 	Download(m *mirror.Mirror, pkgPath string) (*Result, error)
 }
