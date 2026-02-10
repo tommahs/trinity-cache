@@ -133,7 +133,6 @@ func (fm *FetchManager) FetchVersion(name, version, pkgPath string) (*Result, er
 // Returns a list of packages with available updates
 func (fm *FetchManager) CheckForUpdates(packageNames []string) (map[string]string, error) {
 	updates := make(map[string]string)
-	mu := sync.Mutex{}
 
 	var wg sync.WaitGroup
 	semaphore := make(chan struct{}, 5) // Limit concurrent checks to 5
