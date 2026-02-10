@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/tommahs/trinity-cache/internal/logger"
+	"github.com/tommahs/trinity-cache/internal/metrics"
 	"github.com/tommahs/trinity-cache/internal/mirror"
 )
 
@@ -91,8 +92,8 @@ func (hd *HTTPDownloader) Download(m *mirror.Mirror, pkgPath string) (*Result, e
 		return nil, fmt.Errorf("mirror and package path cannot be nil/empty")
 	}
 
-	// For deduplication, we would need more info (name, version)
-	// For now, just download with retry and mirror rotation
+	// Record download attempt start
+	timer := metrics.RecordDownloadStart()
 
 	var lastErr error
 	for attempt := 0; attempt < hd.retries; attempt++ {
@@ -113,6 +114,8 @@ func (hd *HTTPDownloader) Download(m *mirror.Mirror, pkgPath string) (*Result, e
 			// Mark mirror as penalized after use
 			hd.selector.Penalize(currentMirror, 0.5)
 			logger.Info("package downloaded successfully", "url", currentMirror.URL, "path", pkgPath)
+						// Record successful download with byte size
+						timer.RecordSuccess(result.Size)
 			return result, nil
 		}
 
@@ -121,6 +124,8 @@ func (hd *HTTPDownloader) Download(m *mirror.Mirror, pkgPath string) (*Result, e
 
 		// Penalize the mirror that failed
 		hd.selector.Penalize(currentMirror, 1.0)
+		// Record download failure
+		timer.RecordFailure()
 	}
 
 	return nil, fmt.Errorf("failed to download after %d attempts: %w", hd.retries, lastErr)

@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/tommahs/trinity-cache/internal/logger"
+	"github.com/tommahs/trinity-cache/internal/metrics"
 )
 
 // Mirror represents an upstream package mirror and its runtime state.
@@ -128,6 +129,7 @@ func (ws *WeightedSelector) Select() (*Mirror, error) {
 	}
 
 	logger.Debug("mirror selected", "url", selected.URL, "effective_weight", selected.EffectiveWeight, "score", maxScore)
+		metrics.RecordMirrorSelection()
 	return selected, nil
 }
 
@@ -188,6 +190,7 @@ func (ws *WeightedSelector) Penalize(m *Mirror, penalty float64) {
 	}
 	m.LastUsed = time.Now()
 	logger.Debug("mirror penalized", "url", m.URL, "old_weight", oldWeight, "new_weight", m.EffectiveWeight, "penalty", penalty)
+	metrics.RecordMirrorPenalty()
 }
 
 // StartRecovery starts a background goroutine that periodically recovers mirror weights
@@ -242,6 +245,7 @@ func (ws *WeightedSelector) recoverWeights(recoveryRate float64) {
 						m.EffectiveWeight = m.BaseWeight
 					}
 					logger.Debug("mirror weight recovered", "url", m.URL, "old_weight", oldWeight, "new_weight", m.EffectiveWeight)
+									metrics.RecordMirrorRecovery()
 				}
 			}
 			ws.mu.Unlock()

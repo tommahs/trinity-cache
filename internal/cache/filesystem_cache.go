@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/tommahs/trinity-cache/internal/logger"
+	"github.com/tommahs/trinity-cache/internal/metrics"
 )
 
 // FilesystemCache implements CacheManager using the local filesystem.
@@ -105,6 +106,11 @@ func (fc *FilesystemCache) Add(p *PackageVersion) error {
 	}
 
 	logger.Debug("package added to cache", "name", p.Name, "version", p.Version, "path", expectedPath)
+
+	// Update cache stats (packages and versions count)
+	// This is somewhat expensive (directory scan) but ensures metrics are up-to-date after an add
+	packages, versions := fc.countPackagesAndVersions()
+	metrics.UpdateCacheStats(int64(packages), int64(versions))
 	return nil
 }
 
@@ -202,7 +208,44 @@ func (fc *FilesystemCache) Remove(name, version string) error {
 	}
 
 	logger.Debug("package removed from cache", "name", name, "version", version)
+
+	// Update cache stats after removal
+	packages, versions := fc.countPackagesAndVersions()
+	metrics.UpdateCacheStats(int64(packages), int64(versions))
 	return nil
+}
+
+// countPackagesAndVersions scans the storage path and returns counts of packages and versions
+func (fc *FilesystemCache) countPackagesAndVersions() (int, int) {
+	packages := 0
+	versions := 0
+
+	entries, err := os.ReadDir(fc.storagePath)
+	if err != nil {
+		return 0, 0
+	}
+
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		packages++
+		pkgDir := filepath.Join(fc.storagePath, e.Name())
+		subEntries, err := os.ReadDir(pkgDir)
+		if err != nil {
+			continue
+		}
+		for _, se := range subEntries {
+			if se.IsDir() {
+				continue
+			}
+			if strings.HasSuffix(se.Name(), ".pkg") {
+				versions++
+			}
+		}
+	}
+
+	return packages, versions
 }
 
 // GetStoragePath returns the storage path used by this cache.

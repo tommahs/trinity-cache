@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/tommahs/trinity-cache/internal/logger"
+	"github.com/tommahs/trinity-cache/internal/metrics"
 )
 
 // RetentionManager enforces version retention policies on the cache.
@@ -87,7 +88,16 @@ func (rm *RetentionManager) EnforceNow() error {
 			if err := rm.cache.RetainMostRecent(packageName, rm.retentionCount); err != nil {
 				logger.Error("failed to enforce retention", "package", packageName, "error", err)
 			} else {
-				removedCount += pkgCount - rm.retentionCount
+				removed := pkgCount - rm.retentionCount
+				removedCount += removed
+				// record metrics for removed versions/packages
+				for i := 0; i < removed; i++ {
+					metrics.RecordVersionRemoved()
+				}
+				// Record package-level removal once per package if any versions removed
+				if removed > 0 {
+					metrics.RecordPackageRemoved()
+				}
 			}
 		}
 	}
