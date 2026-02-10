@@ -89,6 +89,44 @@ func main() {
 	}
 }
 
+// CacheAdapter adapts cache.CacheManager to downloader.Cache interface
+type CacheAdapter struct {
+	manager cache.CacheManager
+}
+
+// NewCacheAdapter creates a new cache adapter
+func NewCacheAdapter(manager cache.CacheManager) *CacheAdapter {
+	return &CacheAdapter{manager: manager}
+}
+
+// GetPackagePath returns the path for a package
+func (ca *CacheAdapter) GetPackagePath(name, version string) string {
+	if fc, ok := ca.manager.(*cache.FilesystemCache); ok {
+		return fc.GetPackagePath(name, version)
+	}
+	return ""
+}
+
+// Has checks if a package exists in the cache
+func (ca *CacheAdapter) Has(name, version string) (bool, error) {
+	return ca.manager.Has(name, version)
+}
+
+// Add adds a package to the cache
+func (ca *CacheAdapter) Add(name, version, path string) error {
+	pv := &cache.PackageVersion{
+		Name:    name,
+		Version: version,
+		Path:    path,
+	}
+	return ca.manager.Add(pv)
+}
+
+// RetainMostRecent keeps only the most recent versions of a package
+func (ca *CacheAdapter) RetainMostRecent(name string, keep int) error {
+	return ca.manager.RetainMostRecent(name, keep)
+}
+
 // NewApplication initializes all application components
 func NewApplication(cfg *config.Config, serverPort string) (*Application, error) {
 	// Initialize cache
@@ -108,10 +146,12 @@ func NewApplication(cfg *config.Config, serverPort string) (*Application, error)
 	}
 
 	// Start mirror weight recovery
-	selector.(*mirror.WeightedSelector).StartRecovery(5*time.Minute, 0.05)
+	selector.StartRecovery(5*time.Minute, 0.05)
 
 	// Initialize HTTP downloader
-	httpDownloader, err := downloader.NewHTTPDownloader(selector, cacheManager, "/tmp")
+	// Create a cache adapter for the downloader
+	cacheAdapter := NewCacheAdapter(cacheManager)
+	httpDownloader, err := downloader.NewHTTPDownloader(selector, cacheAdapter, "/tmp")
 	if err != nil {
 		return nil, fmt.Errorf("failed to initialize downloader: %w", err)
 	}
@@ -139,7 +179,7 @@ func NewApplication(cfg *config.Config, serverPort string) (*Application, error)
 	}
 
 	// Initialize HTTP server
-	httpServer, err := server.NewHTTPServer(cacheManager, serverPort)
+	httpSrvr, err := server.NewHTTPServer(cacheManager, serverPort)
 	if err != nil {
 		return nil, fmt.Errorf("failed to initialize HTTP server: %w", err)
 	}
@@ -152,10 +192,8 @@ func NewApplication(cfg *config.Config, serverPort string) (*Application, error)
 	}
 
 	// Set fetch manager on HTTP server if available
-	if fetchManager != nil && httpServer != nil {
-		if httpSrvr, ok := httpServer.(*server.HTTPServer); ok {
-			httpSrvr.SetFetchManager(fetchManager)
-		}
+	if fetchManager != nil && httpSrvr != nil {
+		httpSrvr.SetFetchManager(fetchManager)
 	}
 
 	return &Application{
@@ -164,7 +202,7 @@ func NewApplication(cfg *config.Config, serverPort string) (*Application, error)
 		downloader:   httpDownloader,
 		workerPool:   workerPool,
 		fetchManager: fetchManager,
-		httpServer:   httpServer,
+		httpServer:   httpSrvr,
 		retention:    retention,
 		shutdown:     make(chan os.Signal, 1),
 		shutdownDone: make(chan struct{}),
@@ -210,7 +248,8 @@ func (app *Application) Shutdown() error {
 	app.workerPool.WaitForCompletion()
 
 	// Stop mirror recovery
-	if selector, ok := app.selector.(*mirror.WeightedSelector); ok {
+	selector, _ := app.selector.(*mirror.WeightedSelector)
+	if selector != nil {
 		logger.Debug("stopping mirror recovery")
 		selector.Stop()
 	}
