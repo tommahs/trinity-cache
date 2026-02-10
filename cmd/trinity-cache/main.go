@@ -37,7 +37,7 @@ type Application struct {
 func main() {
 	configPath := flag.String("config", "", "Path to YAML config file")
 	showVersion := flag.Bool("version", false, "Show version")
-	serverPort := flag.String("port", "8080", "HTTP server port")
+	serverPort := flag.String("port", "", "HTTP server port (overrides config)")
 	flag.Parse()
 
 	if *showVersion {
@@ -58,6 +58,15 @@ func main() {
 		cfg = config.Default()
 	}
 
+	// Override port from CLI if provided
+	if *serverPort != "" {
+		cfg.Server.Port = ":" + *serverPort
+	}
+	// Ensure port has colon prefix
+	if cfg.Server.Port != "" && cfg.Server.Port[0] != ':' {
+		cfg.Server.Port = ":" + cfg.Server.Port
+	}
+
 	// Configure logger based on loaded config
 	logger.SetLevel(logger.ParseLevel(cfg.LogLevel))
 
@@ -73,11 +82,10 @@ func main() {
 		"concurrency", cfg.Concurrency,
 		"storage", cfg.StoragePath,
 		"mirrors", len(cfg.Mirrors),
-		"port", *serverPort)
+		"server", cfg.Server)
 
-	*serverPort = ":" + *serverPort
 	// Initialize application
-	app, err := NewApplication(cfg, *serverPort)
+	app, err := NewApplication(cfg)
 	if err != nil {
 		logger.Error("failed to initialize application", "error", err)
 		os.Exit(1)
@@ -129,7 +137,7 @@ func (ca *CacheAdapter) RetainMostRecent(name string, keep int) error {
 }
 
 // NewApplication initializes all application components
-func NewApplication(cfg *config.Config, serverPort string) (*Application, error) {
+func NewApplication(cfg *config.Config) (*Application, error) {
 	// Initialize cache
 	cacheManager, err := cache.NewFilesystemCache(cfg.StoragePath)
 	if err != nil {
@@ -146,13 +154,21 @@ func NewApplication(cfg *config.Config, serverPort string) (*Application, error)
 		})
 	}
 
-	// Start mirror weight recovery
-	selector.StartRecovery(5*time.Minute, 0.05)
+	// Start mirror weight recovery using configured values
+	recoveryInterval := time.Duration(cfg.MirrorRecovery.Interval) * time.Minute
+	selector.StartRecovery(recoveryInterval, cfg.MirrorRecovery.Rate)
 
-	// Initialize HTTP downloader
+	// Initialize HTTP downloader with configured values
 	// Create a cache adapter for the downloader
 	cacheAdapter := NewCacheAdapter(cacheManager)
-	httpDownloader, err := downloader.NewHTTPDownloader(selector, cacheAdapter, "/tmp")
+	tempDir := cfg.Downloads.TempDir
+	httpDownloader, err := downloader.NewHTTPDownloader(
+		selector,
+		cacheAdapter,
+		tempDir,
+		cfg.Downloads.MaxRetries,
+		cfg.Downloads.Timeout,
+	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to initialize downloader: %w", err)
 	}
@@ -168,10 +184,11 @@ func NewApplication(cfg *config.Config, serverPort string) (*Application, error)
 		return nil, fmt.Errorf("failed to start worker pool: %w", err)
 	}
 
-	// Initialize retention manager
+	// Initialize retention manager with configured values
 	retention := cache.NewRetentionManager(cacheManager)
-	retention.SetRetentionCount(2)
-	retention.StartPeriodicEnforcement(1 * time.Hour)
+	retention.SetRetentionCount(cfg.Retention.KeepVersions)
+	enforcementInterval := time.Duration(cfg.Retention.EnforcementInterval * float64(time.Hour))
+	retention.StartPeriodicEnforcement(enforcementInterval)
 
 	// Initialize version tracker
 	versionTracker, err := versiontracker.NewInMemoryTracker(cacheManager)
@@ -179,8 +196,13 @@ func NewApplication(cfg *config.Config, serverPort string) (*Application, error)
 		return nil, fmt.Errorf("failed to initialize version tracker: %w", err)
 	}
 
-	// Initialize HTTP server
-	httpSrvr, err := server.NewHTTPServer(cacheManager, serverPort)
+	// Initialize HTTP server with configured timeouts
+	httpSrvr, err := server.NewHTTPServer(
+		cacheManager,
+		cfg.Server.Port,
+		cfg.Server.ReadTimeout,
+		cfg.Server.WriteTimeout,
+	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to initialize HTTP server: %w", err)
 	}

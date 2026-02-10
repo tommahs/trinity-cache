@@ -1,6 +1,7 @@
 package downloader
 
 import (
+	"context"
 	"crypto/sha256"
 	"fmt"
 	"io"
@@ -49,9 +50,18 @@ type deduplicationEntry struct {
 }
 
 // NewHTTPDownloader creates a new HTTP downloader.
-func NewHTTPDownloader(selector mirror.Selector, cache Cache, tempDir string) (*HTTPDownloader, error) {
+// maxRetries: number of retry attempts (minimum 1)
+// timeoutSeconds: timeout for individual downloads in seconds
+func NewHTTPDownloader(selector mirror.Selector, cache Cache, tempDir string, maxRetries int, timeoutSeconds int) (*HTTPDownloader, error) {
 	if selector == nil || cache == nil {
 		return nil, fmt.Errorf("selector and cache cannot be nil")
+	}
+
+	if maxRetries < 1 {
+		maxRetries = 3 // default
+	}
+	if timeoutSeconds < 1 {
+		timeoutSeconds = 30 // default
 	}
 
 	if tempDir == "" {
@@ -62,14 +72,16 @@ func NewHTTPDownloader(selector mirror.Selector, cache Cache, tempDir string) (*
 		return nil, fmt.Errorf("failed to create temp directory: %w", err)
 	}
 
+	timeout := time.Duration(timeoutSeconds) * time.Second
+
 	return &HTTPDownloader{
 		selector:   selector,
 		cache:      cache,
 		dedupes:    make(map[string]*deduplicationEntry),
 		tempDir:    tempDir,
-		retries:    3,
-		timeout:    30 * time.Second,
-		httpClient: &http.Client{Timeout: 30 * time.Second},
+		retries:    maxRetries,
+		timeout:    timeout,
+		httpClient: &http.Client{Timeout: timeout},
 	}, nil
 }
 
@@ -130,8 +142,13 @@ func (hd *HTTPDownloader) downloadFromMirror(m *mirror.Mirror, pkgPath string) (
 	}
 	defer tempFile.Close()
 
+	// Create context with mirror-specific timeout
+	// Use a context with the timeout from the mirror, or fall back to the default client timeout
+	ctx, cancel := context.WithTimeout(context.Background(), hd.timeout)
+	defer cancel()
+
 	// Perform HTTP GET
-	req, err := http.NewRequest("GET", url, nil)
+	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 	if err != nil {
 		os.Remove(tempFile.Name())
 		return nil, fmt.Errorf("failed to create HTTP request: %w", err)

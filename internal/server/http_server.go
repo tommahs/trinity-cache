@@ -32,13 +32,21 @@ type HTTPServer struct {
 }
 
 // NewHTTPServer creates a new HTTP server for package serving
-func NewHTTPServer(cache cache.CacheManager, addr string) (*HTTPServer, error) {
+// readTimeoutSec and writeTimeoutSec are in seconds
+func NewHTTPServer(cache cache.CacheManager, addr string, readTimeoutSec, writeTimeoutSec int) (*HTTPServer, error) {
 	if cache == nil {
 		return nil, fmt.Errorf("cache manager cannot be nil")
 	}
 
 	if addr == "" {
 		addr = ":8080"
+	}
+
+	if readTimeoutSec < 1 {
+		readTimeoutSec = 30
+	}
+	if writeTimeoutSec < 1 {
+		writeTimeoutSec = 30
 	}
 
 	s := &HTTPServer{
@@ -49,16 +57,21 @@ func NewHTTPServer(cache cache.CacheManager, addr string) (*HTTPServer, error) {
 
 	// Create HTTP server with routes
 	mux := http.NewServeMux()
-	mux.HandleFunc("/", s.handlePacmanRequest)          // Primary pacman route
+	mux.HandleFunc("/", s.handlePacmanRequest)               // Primary pacman route
 	mux.HandleFunc("/api/v1/packages/", s.handlePackageRequest)
 	mux.HandleFunc("/api/v1/fetch/", s.handleFetchRequest)
 	mux.HandleFunc("/api/v1/stats", s.handleStatsRequest)
+	mux.HandleFunc("/api/v1/metrics", s.handleMetrics)        // Prometheus format by default
+	mux.HandleFunc("/metrics", s.handleMetrics)               // Prometheus format (standard path)
+	mux.HandleFunc("/metrics/summary", s.handleMetricsSummary) // Human-readable summary
 	mux.HandleFunc("/health", s.handleHealth)
-	mux.HandleFunc("/metrics", s.handleMetrics)
+	mux.HandleFunc("/healthz", s.handleHealth) // Kubernetes-compatible health endpoint
 
 	s.httpServer = &http.Server{
-		Addr:    addr,
-		Handler: mux,
+		Addr:         addr,
+		Handler:      mux,
+		ReadTimeout:  time.Duration(readTimeoutSec) * time.Second,
+		WriteTimeout: time.Duration(writeTimeoutSec) * time.Second,
 	}
 
 	return s, nil
@@ -509,17 +522,59 @@ func (s *HTTPServer) handleHealth(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(health)
 }
 
-// handleMetrics returns metrics in JSON format
+// handleMetrics returns metrics in Prometheus or JSON format
+// Supports query parameter ?format=json or Accept header for format negotiation
 func (s *HTTPServer) handleMetrics(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
 	}
 
-	snapshot := metrics.GetSnapshot()
+	// Check for format query parameter
+	format := r.URL.Query().Get("format")
+	if format == "" {
+		// Check Accept header for prometheus format
+		acceptHeader := r.Header.Get("Accept")
+		if strings.Contains(acceptHeader, "application/vnd.google.protobuf") ||
+			strings.Contains(acceptHeader, "text/plain") {
+			format = "prometheus"
+		}
+	}
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(snapshot)
+	// Default to prometheus format
+	if format == "" {
+		format = "prometheus"
+	}
+
+	if format == "json" {
+		// Return JSON format for backward compatibility
+		metricsData := metrics.GetMetricsJSON()
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(metricsData)
+		return
+	}
+
+	// Return Prometheus format (0.0.4)
+	pm := metrics.NewPrometheusMetrics(nil)
+	prometheusData := pm.Export()
+
+	w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
+	w.WriteHeader(http.StatusOK)
+	fmt.Fprint(w, prometheusData)
+}
+
+// handleMetricsSummary serves a human-readable metrics summary
+func (s *HTTPServer) handleMetricsSummary(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+
+	metricsData := metrics.NewPrometheusMetrics(metrics.GetGlobalMetrics()).ExportSummary()
+
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.WriteHeader(http.StatusOK)
+	fmt.Fprint(w, metricsData)
 }
 
 // ServePackage serves a package file directly
