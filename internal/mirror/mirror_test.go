@@ -467,3 +467,205 @@ func TestWeightedSelector_SelectionAlgorithm_ComplexScenario(t *testing.T) {
 		t.Errorf("expected valid mirror selection")
 	}
 }
+
+// --- Tests for mirror weight recovery (Issue #9) ---
+
+func TestWeightedSelector_StartRecovery_RecoveryIncreases(t *testing.T) {
+	ws := NewWeightedSelector()
+	m := &Mirror{URL: "https://mirror.com", BaseWeight: 10.0, EffectiveWeight: 5.0}
+	ws.Add(m)
+
+	// Start recovery with 50% recovery rate and 100ms interval
+	ws.StartRecovery(100*time.Millisecond, 0.5)
+	defer ws.Stop()
+
+	time.Sleep(250 * time.Millisecond) // Wait for multiple recovery cycles
+
+	// Effective weight should have increased from 5.0 toward 10.0
+	// With 50% recovery rate: 5 -> 7.5 -> 8.75 -> etc.
+	if m.EffectiveWeight <= 5.0 {
+		t.Errorf("mirror weight should have increased, got %f", m.EffectiveWeight)
+	}
+	if m.EffectiveWeight > 10.0 {
+		t.Errorf("mirror weight should not exceed base weight, got %f", m.EffectiveWeight)
+	}
+}
+
+func TestWeightedSelector_StartRecovery_DoesNotExceedBaseWeight(t *testing.T) {
+	ws := NewWeightedSelector()
+	m := &Mirror{URL: "https://mirror.com", BaseWeight: 5.0, EffectiveWeight: 3.0}
+	ws.Add(m)
+
+	ws.StartRecovery(50*time.Millisecond, 0.5)
+	defer ws.Stop()
+
+	time.Sleep(500 * time.Millisecond) // Wait for many recovery cycles
+
+	// Effective weight should converge to base weight but not exceed it
+	if m.EffectiveWeight > m.BaseWeight {
+		t.Errorf("effective weight exceeded base weight: %f > %f", m.EffectiveWeight, m.BaseWeight)
+	}
+
+	// Should be very close to base weight after many cycles
+	if math.Abs(m.EffectiveWeight-m.BaseWeight) > 0.1 {
+		t.Logf("mirror weight recovered to %f (expected ~%f)", m.EffectiveWeight, m.BaseWeight)
+	}
+}
+
+func TestWeightedSelector_Stop_StopsRecovery(t *testing.T) {
+	ws := NewWeightedSelector()
+	m := &Mirror{URL: "https://mirror.com", BaseWeight: 10.0, EffectiveWeight: 2.0}
+	ws.Add(m)
+
+	ws.StartRecovery(50*time.Millisecond, 0.5)
+
+	time.Sleep(100 * time.Millisecond)
+	initialWeight := m.EffectiveWeight
+
+	ws.Stop()
+
+	time.Sleep(200 * time.Millisecond)
+	finalWeight := m.EffectiveWeight
+
+	// After stop, weight should not have changed significantly
+	if math.Abs(finalWeight-initialWeight) > 0.1 {
+		t.Errorf("weight changed after stop: %f -> %f", initialWeight, finalWeight)
+	}
+}
+
+func TestWeightedSelector_StartRecovery_MultipleCallsIgnored(t *testing.T) {
+	ws := NewWeightedSelector()
+	m := &Mirror{URL: "https://mirror.com", BaseWeight: 10.0, EffectiveWeight: 5.0}
+	ws.Add(m)
+
+	ws.StartRecovery(100*time.Millisecond, 0.5)
+	defer ws.Stop()
+
+	// Try to start recovery again - should be ignored
+	ws.StartRecovery(100*time.Millisecond, 0.5)
+
+	time.Sleep(150 * time.Millisecond)
+
+	// Should still work normally (weight should recover)
+	if m.EffectiveWeight <= 5.0 {
+		t.Errorf("recovery should still work after second start call")
+	}
+}
+
+func TestWeightedSelector_Recovery_RespectsRecoveryRate(t *testing.T) {
+	ws := NewWeightedSelector()
+	m := &Mirror{URL: "https://mirror.com", BaseWeight: 10.0, EffectiveWeight: 5.0}
+	ws.Add(m)
+
+	// With 10% recovery rate, recovery is slower
+	ws.StartRecovery(50*time.Millisecond, 0.1)
+	defer ws.Stop()
+
+	time.Sleep(100 * time.Millisecond)
+
+	// With only 2 cycles at 10% rate:
+	// 5.0 -> 5.5 (5 + 0.1*5) -> 5.95
+	if m.EffectiveWeight > 6.5 {
+		t.Errorf("recovery rate too high, expected < 6.5, got %f", m.EffectiveWeight)
+	}
+}
+
+func TestWeightedSelector_Recovery_MultipleMirrors(t *testing.T) {
+	ws := NewWeightedSelector()
+	m1 := &Mirror{URL: "https://mirror1.com", BaseWeight: 10.0, EffectiveWeight: 3.0}
+	m2 := &Mirror{URL: "https://mirror2.com", BaseWeight: 5.0, EffectiveWeight: 1.0}
+	m3 := &Mirror{URL: "https://mirror3.com", BaseWeight: 8.0, EffectiveWeight: 8.0} // Already at base
+
+	ws.Add(m1)
+	ws.Add(m2)
+	ws.Add(m3)
+
+	ws.StartRecovery(100*time.Millisecond, 0.5)
+	defer ws.Stop()
+
+	time.Sleep(250 * time.Millisecond)
+
+	// m1 should have increased
+	if m1.EffectiveWeight <= 3.0 {
+		t.Errorf("m1 should have recovered")
+	}
+
+	// m2 should have increased
+	if m2.EffectiveWeight <= 1.0 {
+		t.Errorf("m2 should have recovered")
+	}
+
+	// m3 should remain at base weight
+	if m3.EffectiveWeight != 8.0 {
+		t.Errorf("m3 should stay at base weight, got %f", m3.EffectiveWeight)
+	}
+}
+
+func TestWeightedSelector_PenalizeAndRecover_Cycle(t *testing.T) {
+	ws := NewWeightedSelector()
+	m := &Mirror{URL: "https://mirror.com", BaseWeight: 10.0, EffectiveWeight: 10.0}
+	ws.Add(m)
+
+	ws.StartRecovery(50*time.Millisecond, 0.5)
+	defer ws.Stop()
+
+	// Penalize the mirror
+	ws.Penalize(m, 5.0)
+	if m.EffectiveWeight != 5.0 {
+		t.Errorf("penalty failed: expected 5.0, got %f", m.EffectiveWeight)
+	}
+
+	// Let it recover
+	time.Sleep(200 * time.Millisecond)
+
+	// Weight should have increased again
+	if m.EffectiveWeight <= 5.0 {
+		t.Errorf("mirror should have recovered from penalty")
+	}
+
+	// But should not exceed base weight
+	if m.EffectiveWeight > 10.0 {
+		t.Errorf("effective weight exceeded base weight: %f", m.EffectiveWeight)
+	}
+}
+
+func TestWeightedSelector_Recovery_ConcurrentOperations(t *testing.T) {
+	ws := NewWeightedSelector()
+	m := &Mirror{URL: "https://mirror.com", BaseWeight: 10.0, EffectiveWeight: 5.0}
+	ws.Add(m)
+
+	ws.StartRecovery(50*time.Millisecond, 0.5)
+	defer ws.Stop()
+
+	done := make(chan bool, 3)
+
+	// Concurrent recovery, selection, and penalization
+	go func() {
+		for i := 0; i < 20; i++ {
+			ws.Select()
+		}
+		done <- true
+	}()
+
+	go func() {
+		for i := 0; i < 20; i++ {
+			ws.Penalize(m, 0.1)
+		}
+		done <- true
+	}()
+
+	go func() {
+		for i := 0; i < 20; i++ {
+			_ = ws.List()
+		}
+		done <- true
+	}()
+
+	<-done
+	<-done
+	<-done
+
+	// Should complete without panic or deadlock
+	t.Logf("Concurrent operations completed successfully, final weight: %f", m.EffectiveWeight)
+}
+

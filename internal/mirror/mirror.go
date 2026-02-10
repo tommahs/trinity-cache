@@ -65,10 +65,12 @@ type Selector interface {
 // WeightedSelector implements the Selector interface using a scoring algorithm
 // that considers effective weight, recent usage, and in-flight downloads.
 type WeightedSelector struct {
-	mirrors []*Mirror
-	mu      sync.RWMutex
-	// timeNow is injected for testing time-dependent behavior
-	timeNow func() time.Time
+	mirrors         []*Mirror
+	mu              sync.RWMutex
+	timeNow         func() time.Time // injected for testing time-dependent behavior
+	stopChan        chan struct{}     // signal to stop recovery goroutine
+	recoveryTicker  *time.Ticker     // ticker for periodic recovery
+	recoveryRunning bool              // whether recovery goroutine is active
 }
 
 // NewWeightedSelector creates a new weighted selector.
@@ -186,4 +188,78 @@ func (ws *WeightedSelector) Penalize(m *Mirror, penalty float64) {
 	}
 	m.LastUsed = time.Now()
 	logger.Debug("mirror penalized", "url", m.URL, "old_weight", oldWeight, "new_weight", m.EffectiveWeight, "penalty", penalty)
+}
+
+// StartRecovery starts a background goroutine that periodically recovers mirror weights
+// toward their base values. The recovery rate is configurable via the recoveryRate parameter
+// (0.0 to 1.0), where 0.0 means no recovery and 1.0 means instant recovery to base weight.
+// The interval parameter controls how often recovery is applied.
+func (ws *WeightedSelector) StartRecovery(interval time.Duration, recoveryRate float64) {
+	ws.mu.Lock()
+	defer ws.mu.Unlock()
+
+	if ws.recoveryRunning {
+		logger.Debug("recovery already running, skipping start request")
+		return
+	}
+
+	if recoveryRate <= 0 || recoveryRate > 1.0 {
+		recoveryRate = 0.05 // default 5% recovery per interval
+	}
+
+	ws.stopChan = make(chan struct{})
+	ws.recoveryTicker = time.NewTicker(interval)
+	ws.recoveryRunning = true
+
+	logger.Info("mirror weight recovery started", "interval", interval.String(), "recovery_rate", recoveryRate)
+
+	go ws.recoverWeights(recoveryRate)
+}
+
+// recoverWeights periodically increases mirror weights toward their base values.
+// This prevents mirror starvation after penalties.
+func (ws *WeightedSelector) recoverWeights(recoveryRate float64) {
+	defer func() {
+		ws.mu.Lock()
+		ws.recoveryRunning = false
+		ws.mu.Unlock()
+	}()
+
+	for {
+		select {
+		case <-ws.stopChan:
+			logger.Debug("mirror weight recovery stopped")
+			return
+		case <-ws.recoveryTicker.C:
+			ws.mu.Lock()
+			for _, m := range ws.mirrors {
+				if m.EffectiveWeight < m.BaseWeight {
+					oldWeight := m.EffectiveWeight
+					// Gradually recover: move toward base weight by recoveryRate
+					m.EffectiveWeight += (m.BaseWeight - m.EffectiveWeight) * recoveryRate
+					// Ensure we don't exceed base weight
+					if m.EffectiveWeight > m.BaseWeight {
+						m.EffectiveWeight = m.BaseWeight
+					}
+					logger.Debug("mirror weight recovered", "url", m.URL, "old_weight", oldWeight, "new_weight", m.EffectiveWeight)
+				}
+			}
+			ws.mu.Unlock()
+		}
+	}
+}
+
+// Stop stops the background weight recovery goroutine.
+func (ws *WeightedSelector) Stop() {
+	ws.mu.Lock()
+	defer ws.mu.Unlock()
+
+	if !ws.recoveryRunning || ws.stopChan == nil {
+		return
+	}
+
+	close(ws.stopChan)
+	if ws.recoveryTicker != nil {
+		ws.recoveryTicker.Stop()
+	}
 }
