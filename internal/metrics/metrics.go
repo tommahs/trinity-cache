@@ -133,6 +133,12 @@ func GetMetrics() Metrics {
 	return snapshot
 }
 
+// GetGlobalMetrics returns a pointer to the global metrics instance
+// This is used by components that need direct access to metrics for exporting or monitoring
+func GetGlobalMetrics() *Metrics {
+	return globalMetrics
+}
+
 // GetSnapshot returns a detailed snapshot with formatted output
 func GetSnapshot() MetricsSnapshot {
 	metrics := GetMetrics()
