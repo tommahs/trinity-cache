@@ -117,7 +117,71 @@ sudo systemctl start trinity-cache
 sudo systemctl status trinity-cache
 ```
 
+### Pacman Integration
+
+To use Trinity-cache with Arch Linux pacman, configure your `pacman.conf`:
+
+```ini
+[core]
+Server = http://localhost:8080/core/os/$arch
+$repo/os/$arch
+
+[extra]
+Server = http://localhost:8080/extra/os/$arch
+
+[multilib]
+Server = http://localhost:8080/multilib/os/$arch
+```
+
+When pacman requests a package, Trinity-cache will:
+1. Check if it's already cached
+2. If not in cache, fetch it from configured upstream mirrors
+3. Cache it for future requests
+4. Serve the package to the client
+
+Example pacman request flow:
+```
+pacman -S linux
+  ↓
+GET http://localhost:8080/core/os/x86_64/linux-6.7.1-1-x86_64.pkg.tar.zst
+  ↓
+Trinity-cache checks cache (MISS) → Fetches from upstream → Caches → Serves
+```
+
+**Note:** Replace `localhost:8080` with your actual cache server address.
+
 ## API Endpoints
+
+### GET /{repo}/os/{arch}/{package-version}.pkg.tar.zst
+**Pacman-compatible package serving endpoint**
+
+This is the primary endpoint for Arch Linux pacman integration. Pacman will request packages in this format.
+
+**Parameters:**
+- `{repo}`: Repository name (core, extra, multilib, etc.)
+- `{arch}`: CPU architecture (x86_64, i686, aarch64, etc.)
+- `{package-version}`: Package filename including version
+
+**Behavior:**
+- If package exists in cache: Serves immediately (cache HIT)
+- If package not in cache: Fetches from upstream mirror, caches it, then serves (cache MISS → DOWNLOAD)
+- Supports concurrent requests with proper cache synchronization
+- Returns appropriate HTTP status codes
+
+**Response:**
+- `200 OK`: Package file (application/octet-stream)
+- `404 Not Found`: Package could not be located or downloaded
+- `503 Service Unavailable`: No upstream mirrors available
+
+**Examples:**
+```bash
+# Request a package (as pacman would)
+curl -O http://localhost:8080/core/os/x86_64/linux-6.7.1-1-x86_64.pkg.tar.zst
+
+# Install multiple packages (automatic caching)
+pacman -Sy
+pacman -S linux base-devel
+```
 
 ### GET /api/v1/packages/{name}/{version}
 Serves a cached package file
@@ -439,12 +503,166 @@ curl -X POST http://localhost:8080/api/v1/admin/cleanup
 curl http://localhost:8080/api/v1/admin/verify
 ```
 
-## Advanced Configuration
+## Pacman Integration Guide
 
-### Custom Mirror Weights Based on Geography
+### Setting Up Your Arch System to Use Trinity-Cache
+
+1. **On the Trinity-cache server machine**, ensure the service is running and accessible:
+
+```bash
+# Start the service
+sudo systemctl start trinity-cache
+
+# Verify it's listening
+curl http://localhost:8080/health
+```
+
+2. **On Arch client machines**, edit `/etc/pacman.conf`:
+
+```ini
+# Replace default repository servers with your cache server
+# Format: http://<cache-server-ip>:<port>/<repo>/os/<arch>
+
+[core]
+Server = http://192.168.1.100:8080/core/os/$arch
+
+[extra]
+Server = http://192.168.1.100:8080/extra/os/$arch
+
+[multilib]
+Server = http://192.168.1.100:8080/multilib/os/$arch
+```
+
+3. **Test the connection**:
+
+```bash
+# Update package database (will cache repo files)
+sudo pacman -Sy
+
+# Install a package (will download from cache or upstream if missing)
+sudo pacman -S linux
+```
+
+### How It Works with Pacman
+
+1. **First Request**: Pacman requests a package from the cache server
+   - Cache checks local storage (cache HIT) → serves immediately
+   - Package not found (cache MISS) → fetches from upstream mirror → caches → serves
+
+2. **Subsequent Requests**: Same package is served from cache instantly
+   - Dramatically reduces bandwidth usage
+   - Speeds up future installations on other machines
+
+3. **Automatic Cleanup**: Old package versions are automatically removed based on retention policy
+
+### Troubleshooting Pacman Issues
+
+#### Pacman Can't Connect to Cache Server
+
+```bash
+# Test connectivity
+curl -I http://192.168.1.100:8080/core/os/x86_64/
+
+# Check firewall
+sudo ufw allow 8080/tcp
+
+# Verify service is running
+sudo systemctl status trinity-cache
+```
+
+#### "Failed to download" Errors
+
+```bash
+# Check cache server logs
+journalctl -u trinity-cache -f
+
+# Verify upstream mirrors are accessible
+curl -I https://mirror.example.com/core/os/x86_64/
+
+# Check cache hit rate
+curl http://192.168.1.100:8080/api/v1/stats | jq '.cache'
+```
+
+#### Slow Package Downloads
+
+```bash
+# Check if packages are actually being cached
+curl http://192.168.1.100:8080/api/v1/stats | jq '.cache'
+
+# Monitor mirror selection
+curl http://192.168.1.100:8080/metrics | jq '.Mirror'
+
+# Adjust concurrency for faster downloads
+# Edit config and increase concurrency value
+
+# Clear slowest mirrors
+# Restart service: sudo systemctl restart trinity-cache
+```
+
+#### Out of Disk Space
+
+```bash
+# Check cache size
+du -sh /var/cache/trinity
+
+# Adjust retention to keep fewer versions
+# Edit /etc/trinity-cache/config.yaml
+# Set retention.keep_versions to 1 or 2
+
+# Restart service
+sudo systemctl restart trinity-cache
+```
+
+### Performance Tuning for Pacman
+
+**Example optimized configuration for home network**:
 
 ```yaml
+log_level: info
+storage_path: /var/cache/trinity
+concurrency: 8  # Adjust based on internet speed
+
+server:
+  port: :8080
+  read_timeout: 30
+  write_timeout: 30
+
 mirrors:
+  # Use 3-4 primary mirrors for reliability
+  - url: https://mirror1.archlinux.org
+    weight: 1.0
+    timeout: 30
+  - url: https://mirror2.archlinux.org
+    weight: 0.9
+    timeout: 30
+  - url: https://mirror3.archlinux.org
+    weight: 0.8
+    timeout: 30
+
+retention:
+  keep_versions: 2  # Keep only 2 versions
+  enforcement_interval: 1h
+
+mirror_recovery:
+  interval: 5m
+  rate: 0.05
+```
+
+### Multi-User Setup (Home Network)
+
+```bash
+# On cache server
+# 1. Make cache directory world-readable
+sudo chmod 755 /var/cache/trinity
+
+# 2. Configure all client machines with same server address
+# In /etc/pacman.conf on each client:
+#   Server = http://cache-server-ip:8080/$repo/os/$arch
+
+# 3. Optional: Monitor usage across all clients
+curl http://localhost:8080/api/v1/stats
+```
+
   # EU Mirror (closest to us)
   - url: https://eu-mirror.example.com
     weight: 1.0

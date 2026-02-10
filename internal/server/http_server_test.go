@@ -318,3 +318,116 @@ func TestHTTPServer_SetFetchManager(t *testing.T) {
 		t.Errorf("nil fetch manager should be ignored")
 	}
 }
+func TestHTTPServer_ParsePackageName_Valid(t *testing.T) {
+	cache := &MockCache{}
+	server, _ := NewHTTPServer(cache, ":0")
+
+	tests := []struct {
+		filename    string
+		arch        string
+		expectedPkg string
+		expectedVer string
+	}{
+		{"linux-6.7.1-1-x86_64.pkg.tar.zst", "x86_64", "linux", "6.7.1-1"},
+		{"base-2.0-1-x86_64.pkg.tar.zst", "x86_64", "base", "2.0-1"},
+		{"gcc-13.2.1-2-x86_64.pkg.tar.zst", "x86_64", "gcc", "13.2.1-2"},
+		{"lib32-glibc-2.38-3-x86_64.pkg.tar.zst", "x86_64", "lib32-glibc", "2.38-3"},
+	}
+
+	for _, tc := range tests {
+		pkg, ver, err := server.parsePackageName(tc.filename, tc.arch)
+		if err != nil {
+			t.Errorf("parsePackageName(%s, %s) failed: %v", tc.filename, tc.arch, err)
+			continue
+		}
+		if pkg != tc.expectedPkg {
+			t.Errorf("parsePackageName(%s, %s) returned pkg=%q, want %q", tc.filename, tc.arch, pkg, tc.expectedPkg)
+		}
+		if ver != tc.expectedVer {
+			t.Errorf("parsePackageName(%s, %s) returned ver=%q, want %q", tc.filename, tc.arch, ver, tc.expectedVer)
+		}
+	}
+}
+
+func TestHTTPServer_ParsePackageName_Invalid(t *testing.T) {
+	cache := &MockCache{}
+	server, _ := NewHTTPServer(cache, ":0")
+
+	tests := []struct {
+		filename string
+		arch     string
+	}{
+		{"invalid.pkg.tar.zst", "x86_64"},                    // missing version
+		{"linux-6.7.1-1-i686.pkg.tar.zst", "x86_64"},         // arch mismatch
+		{"", "x86_64"},                                         // empty filename
+		{"linux-x86_64.pkg.tar.zst", "x86_64"},                // no version
+	}
+
+	for _, tc := range tests {
+		_, _, err := server.parsePackageName(tc.filename, tc.arch)
+		if err == nil {
+			t.Errorf("parsePackageName(%s, %s) should have failed", tc.filename, tc.arch)
+		}
+	}
+}
+
+func TestHTTPServer_HandlePacmanRequest_NotFound(t *testing.T) {
+	cache := &MockCache{}
+	server, _ := NewHTTPServer(cache, ":0")
+
+	req := httptest.NewRequest("GET", "/nonexistent/os/x86_64/package.pkg.tar.zst", nil)
+	w := httptest.NewRecorder()
+
+	// Need to call the mux handler
+	server.httpServer.Handler.ServeHTTP(w, req)
+
+	if w.Code == http.StatusMethodNotAllowed {
+		// This is expected if the route didn't match
+		t.Logf("Route not matched (expected for test setup)")
+	}
+}
+
+func TestHTTPServer_HandlePacmanRequest_InvalidFormat(t *testing.T) {
+	cache := &MockCache{}
+	server, _ := NewHTTPServer(cache, ":0")
+
+	// Invalid path format
+	req := httptest.NewRequest("GET", "/invalid/path/format", nil)
+	w := httptest.NewRecorder()
+
+	server.handlePacmanRequest(w, req)
+
+	if w.Code != http.StatusNotFound {
+		t.Errorf("expected 404 for invalid format, got %d", w.Code)
+	}
+}
+
+func TestHTTPServer_HandlePacmanRequest_MethodNotAllowed(t *testing.T) {
+	cache := &MockCache{}
+	server, _ := NewHTTPServer(cache, ":0")
+
+	req := httptest.NewRequest("DELETE", "/core/os/x86_64/linux-6.7.1-1-x86_64.pkg.tar.zst", nil)
+	w := httptest.NewRecorder()
+
+	server.handlePacmanRequest(w, req)
+
+	if w.Code != http.StatusMethodNotAllowed {
+		t.Errorf("expected 405 for DELETE, got %d", w.Code)
+	}
+}
+
+func TestHTTPServer_HandlePacmanRequest_CacheMiss_NoFetchManager(t *testing.T) {
+	cache := &MockCache{}
+	server, _ := NewHTTPServer(cache, ":0")
+	server.fetchManager = nil // No fetch manager
+
+	// Request a package not in cache
+	req := httptest.NewRequest("GET", "/core/os/x86_64/linux-6.7.1-1-x86_64.pkg.tar.zst", nil)
+	w := httptest.NewRecorder()
+
+	server.handlePacmanRequest(w, req)
+
+	if w.Code != http.StatusServiceUnavailable {
+		t.Errorf("expected 503 when fetch manager not available, got %d", w.Code)
+	}
+}

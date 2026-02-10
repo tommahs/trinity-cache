@@ -48,6 +48,7 @@ func NewHTTPServer(cache cache.CacheManager, addr string) (*HTTPServer, error) {
 
 	// Create HTTP server with routes
 	mux := http.NewServeMux()
+	mux.HandleFunc("/", s.handlePacmanRequest)          // Primary pacman route
 	mux.HandleFunc("/api/v1/packages/", s.handlePackageRequest)
 	mux.HandleFunc("/api/v1/fetch/", s.handleFetchRequest)
 	mux.HandleFunc("/api/v1/stats", s.handleStatsRequest)
@@ -152,6 +153,143 @@ func (s *HTTPServer) SetFetchManager(fm *downloader.FetchManager) {
 	if fm != nil {
 		s.fetchManager = fm
 	}
+}
+
+// handlePacmanRequest handles Arch Linux pacman package requests
+// Format: /{repo}/os/{arch}/{package-version}.pkg.tar.zst
+// Example: /core/os/x86_64/linux-6.7.1-1-x86_64.pkg.tar.zst
+func (s *HTTPServer) handlePacmanRequest(w http.ResponseWriter, r *http.Request) {
+	atomic.AddInt32(&s.activeRequests, 1)
+	defer atomic.AddInt32(&s.activeRequests, -1)
+
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+
+	// Extract the path after the host
+	path := r.URL.Path
+	if path == "/" {
+		w.WriteHeader(http.StatusNotFound)
+		return
+	}
+
+	// Parse path: /{repo}/os/{arch}/{filename}.pkg.tar.zst
+	parts := strings.Split(strings.Trim(path, "/"), "/")
+	if len(parts) < 4 || parts[1] != "os" || !strings.HasSuffix(parts[len(parts)-1], ".pkg.tar.zst") {
+		// Not a pacman request
+		w.WriteHeader(http.StatusNotFound)
+		return
+	}
+
+	repo := parts[0]
+	arch := parts[2]
+	filename := parts[len(parts)-1]
+
+	logger.Info("pacman request", "repo", repo, "arch", arch, "filename", filename)
+
+	// Parse package name and version from filename
+	// Format: {package}-{version}-{arch}.pkg.tar.zst
+	pkgName, version, err := s.parsePackageName(filename, arch)
+	if err != nil {
+		logger.Warn("failed to parse package", "filename", filename, "error", err)
+		w.WriteHeader(http.StatusBadRequest)
+		fmt.Fprintf(w, "Invalid package format")
+		return
+	}
+
+	// Check if package exists in cache
+	cacheExists, _ := s.cacheManager.Has(pkgName, version)
+	if cacheExists {
+		logger.Debug("serving from cache", "package", pkgName, "version", version)
+		metrics.RecordCacheHit()
+		pkgPath := s.getPackagePath(pkgName, version, filename)
+		if err := s.ServePackage(w, pkgPath); err != nil {
+			logger.Error("failed to serve cached package", "path", pkgPath, "error", err)
+		}
+		return
+	}
+
+	// Cache miss - try to download from upstream mirror
+	logger.Info("cache miss, fetching from upstream", "package", pkgName, "version", version)
+	metrics.RecordCacheMiss()
+
+	// Construct package path for download
+	pkgPath := s.getPackagePath(pkgName, version, filename)
+
+	// Try to fetch the package
+	if s.fetchManager != nil {
+		result, err := s.fetchManager.FetchVersion(pkgName, version, pkgPath)
+		if err != nil {
+			logger.Error("failed to fetch package", "package", pkgName, "version", version, "error", err)
+			w.WriteHeader(http.StatusInternalServerError)
+			fmt.Fprintf(w, "Failed to fetch package: %s", err.Error())
+			return
+		}
+
+		logger.Info("package fetched successfully", "package", pkgName, "version", version, "size", result.Size)
+		metrics.RecordCacheHit() // Record as hit after fetch completes
+
+		// Serve the freshly downloaded package
+		if err := s.ServePackage(w, result.Path); err != nil {
+			logger.Error("failed to serve fetched package", "path", result.Path, "error", err)
+		}
+		return
+	}
+
+	// No fetch manager available
+	logger.Warn("fetch manager not available, cannot fetch missing package", "package", pkgName, "version", version)
+	w.WriteHeader(http.StatusServiceUnavailable)
+	fmt.Fprintf(w, "Package not in cache and fetch unavailable")
+}
+
+// parsePackageName extracts package name and version from filename
+// Filename format: {package}-{version}-{arch}.pkg.tar.zst
+// Example: linux-6.7.1-1-x86_64.pkg.tar.zst -> (linux, 6.7.1-1)
+func (s *HTTPServer) parsePackageName(filename, arch string) (string, string, error) {
+	// Remove extension
+	baseName := strings.TrimSuffix(filename, ".pkg.tar.zst")
+
+	// Remove arch suffix
+	archSuffix := "-" + arch
+	if !strings.HasSuffix(baseName, archSuffix) {
+		return "", "", fmt.Errorf("filename doesn't end with expected arch suffix")
+	}
+
+	baseName = strings.TrimSuffix(baseName, archSuffix)
+
+	// Find where package name ends and version begins
+	// Version typically starts with a digit, and package name may contain hyphens
+	// Search from the end for the last occurrence of hyphen followed by version-like pattern
+	parts := strings.Split(baseName, "-")
+	if len(parts) < 2 {
+		return "", "", fmt.Errorf("invalid package format")
+	}
+
+	// Try to find where version starts (typically a digit)
+	// Work backwards to find the version separator
+	for i := len(parts) - 1; i > 0; i-- {
+		if len(parts[i]) > 0 && (parts[i][0] >= '0' && parts[i][0] <= '9') {
+			// Found potential version start
+			pkgName := strings.Join(parts[:i], "-")
+			version := strings.Join(parts[i:], "-")
+
+			if pkgName != "" && version != "" {
+				return pkgName, version, nil
+			}
+		}
+	}
+
+	return "", "", fmt.Errorf("could not parse package name and version")
+}
+
+// getPackagePath constructs the path where a package should be stored
+func (s *HTTPServer) getPackagePath(pkgName, version, filename string) string {
+	// For filesystem cache, construct path like: storage_path/package_name/filename
+	if fc, ok := s.cacheManager.(*cache.FilesystemCache); ok {
+		return fc.GetPackagePath(pkgName, version)
+	}
+	return fmt.Sprintf("/cache/%s/%s", pkgName, filename)
 }
 
 // handlePackageRequest handles GET requests for packages
