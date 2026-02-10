@@ -2,6 +2,8 @@ package versiontracker
 
 import (
 	"testing"
+
+	"github.com/tommahs/trinity-cache/internal/cache"
 )
 
 // MockCacheManager is a mock implementation for testing
@@ -13,15 +15,15 @@ func (m *MockCacheManager) Has(name, version string) (bool, error) {
 	return false, nil
 }
 
-func (m *MockCacheManager) GetLatest(name string) (*Version, error) {
+func (m *MockCacheManager) GetLatest(name string) (*cache.PackageVersion, error) {
 	return nil, nil
 }
 
-func (m *MockCacheManager) Add(p *Version) error {
+func (m *MockCacheManager) Add(p *cache.PackageVersion) error {
 	return nil
 }
 
-func (m *MockCacheManager) ListVersions(name string) ([]*Version, error) {
+func (m *MockCacheManager) ListVersions(name string) ([]*cache.PackageVersion, error) {
 	return nil, nil
 }
 
@@ -31,12 +33,6 @@ func (m *MockCacheManager) RetainMostRecent(name string, keep int) error {
 
 func (m *MockCacheManager) Remove(name, version string) error {
 	return nil
-}
-
-type Version struct {
-	Name    string
-	Version string
-	Path    string
 }
 
 func TestInMemoryTracker_Update(t *testing.T) {
