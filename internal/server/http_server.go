@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -214,27 +215,38 @@ func (s *HTTPServer) handlePacmanRequest(w http.ResponseWriter, r *http.Request)
 	logger.Info("cache miss, fetching from upstream", "package", pkgName, "version", version)
 	metrics.RecordCacheMiss()
 
-	// Construct package path for download
-	pkgPath := s.getPackagePath(pkgName, version, filename)
+	// Construct paths
+	upstreamPath := fmt.Sprintf("%s/os/%s/%s", repo, arch, filename) // For upstream mirror
+	localPath := s.getPackagePath(pkgName, version, filename)         // For local cache
 
 	// Try to fetch the package
 	if s.fetchManager != nil {
-		result, err := s.fetchManager.FetchVersion(pkgName, version, pkgPath)
+		result, err := s.fetchManager.FetchVersion(pkgName, version, upstreamPath)
+		if err == nil && result != nil {
+			// Move downloaded file to cache location
+			if err := s.moveFileToCache(result.Path, localPath); err != nil {
+				logger.Error("failed to move file to cache", "from", result.Path, "to", localPath, "error", err)
+				w.WriteHeader(http.StatusInternalServerError)
+				fmt.Fprintf(w, "Failed to cache package: %s", err.Error())
+				return
+			}
+
+			logger.Info("package cached successfully", "package", pkgName, "version", version, "size", result.Size)
+			metrics.RecordCacheHit() // Record as hit after successful fetch and cache
+
+			// Serve from cache now
+			if err := s.ServePackage(w, localPath); err != nil {
+				logger.Error("failed to serve package from cache", "path", localPath, "error", err)
+			}
+			return
+		}
+
 		if err != nil {
 			logger.Error("failed to fetch package", "package", pkgName, "version", version, "error", err)
 			w.WriteHeader(http.StatusInternalServerError)
 			fmt.Fprintf(w, "Failed to fetch package: %s", err.Error())
 			return
 		}
-
-		logger.Info("package fetched successfully", "package", pkgName, "version", version, "size", result.Size)
-		metrics.RecordCacheHit() // Record as hit after fetch completes
-
-		// Serve the freshly downloaded package
-		if err := s.ServePackage(w, result.Path); err != nil {
-			logger.Error("failed to serve fetched package", "path", result.Path, "error", err)
-		}
-		return
 	}
 
 	// No fetch manager available
@@ -281,6 +293,61 @@ func (s *HTTPServer) parsePackageName(filename, arch string) (string, string, er
 	}
 
 	return "", "", fmt.Errorf("could not parse package name and version")
+}
+
+// getPackagePath constructs the path where a package should be stored
+func (s *HTTPServer) getPackagePath(pkgName, version, filename string) string {
+	// For filesystem cache, construct path like: storage_path/package_name/filename
+	if fc, ok := s.cacheManager.(*cache.FilesystemCache); ok {
+		return fc.GetPackagePath(pkgName, version)
+	}
+	return fmt.Sprintf("/cache/%s/%s", pkgName, filename)
+}
+
+// moveFileToCache moves a downloaded file from temp location to the cache directory
+func (s *HTTPServer) moveFileToCache(tempPath, cachePath string) error {
+	if tempPath == "" || cachePath == "" {
+		return fmt.Errorf("temp and cache paths cannot be empty")
+	}
+
+	// Create cache directory if it doesn't exist
+	cacheDir := fmt.Sprintf("%s/%s", filepath.Dir(cachePath), "")
+	cacheDir = filepath.Dir(cachePath)
+	if err := os.MkdirAll(cacheDir, 0755); err != nil {
+		return fmt.Errorf("failed to create cache directory: %w", err)
+	}
+
+	// Move temp file to cache
+	if err := os.Rename(tempPath, cachePath); err != nil {
+		logger.Debug("rename failed, trying copy+delete", "from", tempPath, "to", cachePath, "error", err)
+		// Fallback: copy then delete
+		if err := copyFile(tempPath, cachePath); err != nil {
+			return fmt.Errorf("failed to copy file to cache: %w", err)
+		}
+		if err := os.Remove(tempPath); err != nil {
+			logger.Warn("failed to remove temp file after copy", "path", tempPath, "error", err)
+		}
+	}
+
+	return nil
+}
+
+// copyFile copies a file from src to dst
+func copyFile(src, dst string) error {
+	source, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer source.Close()
+
+	dest, err := os.Create(dst)
+	if err != nil {
+		return err
+	}
+	defer dest.Close()
+
+	_, err = io.Copy(dest, source)
+	return err
 }
 
 // getPackagePath constructs the path where a package should be stored

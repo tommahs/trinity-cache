@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"testing"
 	"time"
 
@@ -429,5 +430,90 @@ func TestHTTPServer_HandlePacmanRequest_CacheMiss_NoFetchManager(t *testing.T) {
 
 	if w.Code != http.StatusServiceUnavailable {
 		t.Errorf("expected 503 when fetch manager not available, got %d", w.Code)
+	}
+}
+
+func TestHTTPServer_MoveFileToCache(t *testing.T) {
+	cache := &MockCache{}
+	server, _ := NewHTTPServer(cache, ":0")
+
+	// Create a temporary source file
+	tempDir := t.TempDir()
+	srcFile, err := os.Create(tempDir + "/source.txt")
+	if err != nil {
+		t.Fatalf("failed to create source file: %v", err)
+	}
+	if _, err := srcFile.WriteString("test content"); err != nil {
+		t.Fatalf("failed to write to source file: %v", err)
+	}
+	srcFile.Close()
+
+	// Create destination path
+	dstDir := t.TempDir()
+	dstFile := dstDir + "/destination.txt"
+
+	// Move file
+	err = server.moveFileToCache(srcFile.Name(), dstFile)
+	if err != nil {
+		t.Fatalf("moveFileToCache failed: %v", err)
+	}
+
+	// Verify destination exists
+	if _, err := os.Stat(dstFile); err != nil {
+		t.Fatalf("destination file not found: %v", err)
+	}
+
+	// Verify content
+	content, err := os.ReadFile(dstFile)
+	if err != nil {
+		t.Fatalf("failed to read destination file: %v", err)
+	}
+	if string(content) != "test content" {
+		t.Errorf("content mismatch, got %s, want 'test content'", string(content))
+	}
+}
+
+func TestHTTPServer_MoveFileToCache_CreatesDirs(t *testing.T) {
+	cache := &MockCache{}
+	server, _ := NewHTTPServer(cache, ":0")
+
+	// Create a temporary source file
+	tempDir := t.TempDir()
+	srcFile, err := os.Create(tempDir + "/source.txt")
+	if err != nil {
+		t.Fatalf("failed to create source file: %v", err)
+	}
+	srcFile.WriteString("test")
+	srcFile.Close()
+
+	// Create destination path with non-existent directories
+	dstFile := t.TempDir() + "/deep/nested/path/destination.txt"
+
+	// Move file (should create directories)
+	err = server.moveFileToCache(srcFile.Name(), dstFile)
+	if err != nil {
+		t.Fatalf("moveFileToCache failed: %v", err)
+	}
+
+	// Verify destination exists
+	if _, err := os.Stat(dstFile); err != nil {
+		t.Fatalf("destination file not found: %v", err)
+	}
+}
+
+func TestHTTPServer_MoveFileToCache_EmptyPaths(t *testing.T) {
+	cache := &MockCache{}
+	server, _ := NewHTTPServer(cache, ":0")
+
+	// Test with empty src
+	err := server.moveFileToCache("", "/some/path")
+	if err == nil {
+		t.Errorf("expected error for empty source path")
+	}
+
+	// Test with empty dst
+	err = server.moveFileToCache("/some/path", "")
+	if err == nil {
+		t.Errorf("expected error for empty destination path")
 	}
 }
