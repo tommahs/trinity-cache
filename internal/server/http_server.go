@@ -188,17 +188,43 @@ func (s *HTTPServer) handlePacmanRequest(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	// Parse path: /{repo}/os/{arch}/{filename}.pkg.tar.zst
+	// Parse path parts
 	parts := strings.Split(strings.Trim(path, "/"), "/")
-	if len(parts) < 4 || parts[1] != "os" || !strings.HasSuffix(parts[len(parts)-1], ".pkg.tar.zst") {
-		// Not a pacman request
+	if len(parts) < 1 {
 		w.WriteHeader(http.StatusNotFound)
 		return
 	}
 
 	repo := parts[0]
-	arch := parts[2]
 	filename := parts[len(parts)-1]
+
+	// If this is not a package file, attempt to serve repo-level files (e.g., core.db)
+	if !strings.HasSuffix(filename, ".pkg.tar.zst") {
+		if fc, ok := s.cacheManager.(*cache.FilesystemCache); ok {
+			repoFile := filepath.Join(fc.GetStoragePath(), repo, filename)
+			if _, err := os.Stat(repoFile); err == nil {
+				logger.Info("serving repo file", "repo", repo, "filename", filename)
+				metrics.RecordCacheHit()
+				if err := s.ServePackage(w, repoFile); err != nil {
+					logger.Error("failed to serve repo file", "path", repoFile, "error", err)
+				}
+				return
+			}
+		}
+
+		// Not found or not a FilesystemCache; fall through to not-found
+		w.WriteHeader(http.StatusNotFound)
+		return
+	}
+
+	// Expect package path: /{repo}/os/{arch}/{filename}.pkg.tar.zst
+	if len(parts) < 4 || parts[1] != "os" {
+		// Not a pacman package request
+		w.WriteHeader(http.StatusNotFound)
+		return
+	}
+
+	arch := parts[2]
 
 	logger.Info("pacman request", "repo", repo, "arch", arch, "filename", filename)
 
@@ -212,16 +238,30 @@ func (s *HTTPServer) handlePacmanRequest(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	// Check if package exists in cache
-	cacheExists, _ := s.cacheManager.Has(pkgName, version)
-	if cacheExists {
-		logger.Debug("serving from cache", "package", pkgName, "version", version)
-		metrics.RecordCacheHit()
-		pkgPath := s.getPackagePath(pkgName, version, filename)
-		if err := s.ServePackage(w, pkgPath); err != nil {
-			logger.Error("failed to serve cached package", "path", pkgPath, "error", err)
+	// Check if package exists in cache (repo-aware path)
+	var localPath string
+	if fc, ok := s.cacheManager.(*cache.FilesystemCache); ok {
+		localPath = filepath.Join(fc.GetStoragePath(), repo, "os", arch, filename)
+		if _, err := os.Stat(localPath); err == nil {
+			logger.Debug("serving from cache", "package", pkgName, "version", version)
+			metrics.RecordCacheHit()
+			if err := s.ServePackage(w, localPath); err != nil {
+				logger.Error("failed to serve cached package", "path", localPath, "error", err)
+			}
+			return
 		}
-		return
+	} else {
+		// Fallback to cache manager interface if not a FilesystemCache
+		cacheExists, _ := s.cacheManager.Has(pkgName, version)
+		if cacheExists {
+			logger.Debug("serving from cache (fallback)", "package", pkgName, "version", version)
+			metrics.RecordCacheHit()
+			localPath = s.getPackagePath(repo, arch, filename)
+			if err := s.ServePackage(w, localPath); err != nil {
+				logger.Error("failed to serve cached package", "path", localPath, "error", err)
+			}
+			return
+		}
 	}
 
 	// Cache miss - try to download from upstream mirror
@@ -230,7 +270,9 @@ func (s *HTTPServer) handlePacmanRequest(w http.ResponseWriter, r *http.Request)
 
 	// Construct paths
 	upstreamPath := fmt.Sprintf("%s/os/%s/%s", repo, arch, filename) // For upstream mirror
-	localPath := s.getPackagePath(pkgName, version, filename)         // For local cache
+	if localPath == "" {
+		localPath = s.getPackagePath(repo, arch, filename) // For local cache
+	}
 
 	// Try to fetch the package
 	if s.fetchManager != nil {
@@ -309,12 +351,12 @@ func (s *HTTPServer) parsePackageName(filename, arch string) (string, string, er
 }
 
 // getPackagePath constructs the path where a package should be stored
-func (s *HTTPServer) getPackagePath(pkgName, version, filename string) string {
-	// For filesystem cache, construct path like: storage_path/package_name/filename
+func (s *HTTPServer) getPackagePath(repo, arch, filename string) string {
+	// For filesystem cache, construct path like: storage_path/<repo>/os/<arch>/<filename>
 	if fc, ok := s.cacheManager.(*cache.FilesystemCache); ok {
-		return fc.GetPackagePath(pkgName, version)
+		return filepath.Join(fc.GetStoragePath(), repo, "os", arch, filepath.Base(filename))
 	}
-	return fmt.Sprintf("/cache/%s/%s", pkgName, filename)
+	return fmt.Sprintf("/cache/%s/%s", repo, filename)
 }
 
 // moveFileToCache moves a downloaded file from temp location to the cache directory
