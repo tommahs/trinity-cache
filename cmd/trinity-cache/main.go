@@ -37,7 +37,7 @@ type Application struct {
 func main() {
 	configPath := flag.String("config", "", "Path to YAML config file")
 	showVersion := flag.Bool("version", false, "Show version")
-	serverPort := flag.String("port", ":8080", "HTTP server port")
+	serverPort := flag.String("port", "8080", "HTTP server port")
 	flag.Parse()
 
 	if *showVersion {
@@ -75,6 +75,7 @@ func main() {
 		"mirrors", len(cfg.Mirrors),
 		"port", *serverPort)
 
+	*serverPort = ":" + *serverPort
 	// Initialize application
 	app, err := NewApplication(cfg, *serverPort)
 	if err != nil {

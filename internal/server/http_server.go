@@ -350,15 +350,6 @@ func copyFile(src, dst string) error {
 	return err
 }
 
-// getPackagePath constructs the path where a package should be stored
-func (s *HTTPServer) getPackagePath(pkgName, version, filename string) string {
-	// For filesystem cache, construct path like: storage_path/package_name/filename
-	if fc, ok := s.cacheManager.(*cache.FilesystemCache); ok {
-		return fc.GetPackagePath(pkgName, version)
-	}
-	return fmt.Sprintf("/cache/%s/%s", pkgName, filename)
-}
-
 // handlePackageRequest handles GET requests for packages
 func (s *HTTPServer) handlePackageRequest(w http.ResponseWriter, r *http.Request) {
 	atomic.AddInt32(&s.activeRequests, 1)
