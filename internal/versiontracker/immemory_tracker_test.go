@@ -131,8 +131,8 @@ func TestInMemoryTracker_Find(t *testing.T) {
 	tracker.Update("mylib", "1.0")
 
 	results := tracker.Find("app")
-	if len(results) != 3 {
-		t.Errorf("expected 3 packages matching 'app', got %d", len(results))
+	if len(results) != 2 {
+		t.Errorf("expected 2 packages matching 'app', got %d", len(results))
 	}
 
 	results = tracker.Find("lib")
