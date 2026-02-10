@@ -60,9 +60,8 @@ func newMockFetchProbe() *mockFetchProbe {
 	return &mockFetchProbe{
 		result: &Result{
 			Size:     1024,
-			SHA256:   "abc123",
+			Checksum: "abc123",
 			Path:     "/test/path",
-			Duration: time.Second,
 		},
 	}
 }

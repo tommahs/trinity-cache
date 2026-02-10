@@ -75,7 +75,7 @@ func (s *HTTPServer) Start() error {
 	logger.Info("starting HTTP server", "addr", s.httpServer.Addr)
 
 	go func() {
-		if err := s.httpServer.ListenAndServe(); err != nil && err != http.ErrShutdown {
+		if err := s.httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			logger.Error("HTTP server error", "error", err)
 		}
 	}()
@@ -246,9 +246,8 @@ func (s *HTTPServer) handleFetchRequest(w http.ResponseWriter, r *http.Request) 
 		"name":      name,
 		"version":   version,
 		"size":      result.Size,
-		"sha256":    result.SHA256,
+		"checksum":  result.Checksum,
 		"path":      result.Path,
-		"duration":  result.Duration.Seconds(),
 		"timestamp": time.Now(),
 	})
 }

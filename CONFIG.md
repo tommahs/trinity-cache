@@ -194,9 +194,8 @@ Triggers an immediate download of a specific package version from configured mir
   "name": "linux",
   "version": "6.7.1-1",
   "size": 67108864,
-  "sha256": "abcd1234...",
+  "checksum": "abcd1234...",
   "path": "/var/cache/trinity/linux/linux-6.7.1-1.pkg",
-  "duration": 2.345,
   "timestamp": "2026-02-10T15:30:00Z"
 }
 ```
