@@ -21,14 +21,14 @@ import (
 
 // HTTPServer implements the Server interface using HTTP
 type HTTPServer struct {
-	cacheManager    cache.CacheManager
-	fetchManager    *downloader.FetchManager
-	httpServer      *http.Server
-	mu              sync.Mutex
-	running         bool
-	shutdownChan    chan struct{}
-	allDone         chan struct{}
-	activeRequests  int32
+	cacheManager   cache.CacheManager
+	fetchManager   *downloader.FetchManager
+	httpServer     *http.Server
+	mu             sync.Mutex
+	running        bool
+	shutdownChan   chan struct{}
+	allDone        chan struct{}
+	activeRequests int32
 }
 
 // NewHTTPServer creates a new HTTP server for package serving
@@ -57,12 +57,12 @@ func NewHTTPServer(cache cache.CacheManager, addr string, readTimeoutSec, writeT
 
 	// Create HTTP server with routes
 	mux := http.NewServeMux()
-	mux.HandleFunc("/", s.handlePacmanRequest)               // Primary pacman route
+	mux.HandleFunc("/", s.handlePacmanRequest) // Primary pacman route
 	mux.HandleFunc("/api/v1/packages/", s.handlePackageRequest)
 	mux.HandleFunc("/api/v1/fetch/", s.handleFetchRequest)
 	mux.HandleFunc("/api/v1/stats", s.handleStatsRequest)
-	mux.HandleFunc("/api/v1/metrics", s.handleMetrics)        // Prometheus format by default
-	mux.HandleFunc("/metrics", s.handleMetrics)               // Prometheus format (standard path)
+	mux.HandleFunc("/api/v1/metrics", s.handleMetrics)         // Prometheus format by default
+	mux.HandleFunc("/metrics", s.handleMetrics)                // Prometheus format (standard path)
 	mux.HandleFunc("/metrics/summary", s.handleMetricsSummary) // Human-readable summary
 	mux.HandleFunc("/health", s.handleHealth)
 	mux.HandleFunc("/healthz", s.handleHealth) // Kubernetes-compatible health endpoint
@@ -200,19 +200,68 @@ func (s *HTTPServer) handlePacmanRequest(w http.ResponseWriter, r *http.Request)
 
 	// If this is not a package file, attempt to serve repo-level files (e.g., core.db)
 	if !strings.HasSuffix(filename, ".pkg.tar.zst") {
-		if fc, ok := s.cacheManager.(*cache.FilesystemCache); ok {
-			repoFile := filepath.Join(fc.GetStoragePath(), repo, filename)
-			if _, err := os.Stat(repoFile); err == nil {
-				logger.Info("serving repo file", "repo", repo, "filename", filename)
-				metrics.RecordCacheHit()
-				if err := s.ServePackage(w, repoFile); err != nil {
-					logger.Error("failed to serve repo file", "path", repoFile, "error", err)
+		// Expect repo file under /{repo}/os/{arch}/{filename}
+		if len(parts) >= 3 && parts[1] == "os" {
+			arch := parts[2]
+			if fc, ok := s.cacheManager.(*cache.FilesystemCache); ok {
+				repoFile := filepath.Join(fc.GetStoragePath(), repo, "os", arch, filename)
+				if _, err := os.Stat(repoFile); err == nil {
+					logger.Info("serving repo file", "repo", repo, "filename", filename)
+					metrics.RecordCacheHit()
+					if err := s.ServePackage(w, repoFile); err != nil {
+						logger.Error("failed to serve repo file", "path", repoFile, "error", err)
+					}
+					return
 				}
-				return
+
+				// Not present in cache — try to fetch from upstream if available
+				if s.fetchManager != nil {
+					upstreamPath := fmt.Sprintf("%s/os/%s/%s", repo, arch, filename)
+					result, err := s.fetchManager.FetchVersion(repo, filename, upstreamPath)
+					if err == nil && result != nil {
+						if fc, ok := s.cacheManager.(*cache.FilesystemCache); ok {
+							// Let cache place the file in the correct repo layout
+							if _, err := fc.PutRepoFile(repo, arch, filename, result.Path); err != nil {
+								logger.Error("failed to store repo file in cache", "from", result.Path, "to", repoFile, "error", err)
+								w.WriteHeader(http.StatusInternalServerError)
+								fmt.Fprintf(w, "Failed to cache repo file: %s", err.Error())
+								return
+							}
+
+							logger.Info("repo file cached successfully", "repo", repo, "filename", filename, "size", result.Size)
+							metrics.RecordCacheHit()
+							if err := s.ServePackage(w, repoFile); err != nil {
+								logger.Error("failed to serve repo file from cache", "path", repoFile, "error", err)
+							}
+							return
+						}
+
+						// Fallback: server will move file
+						if err := s.moveFileToCache(result.Path, repoFile); err != nil {
+							logger.Error("failed to move repo file to cache", "from", result.Path, "to", repoFile, "error", err)
+							w.WriteHeader(http.StatusInternalServerError)
+							fmt.Fprintf(w, "Failed to cache repo file: %s", err.Error())
+							return
+						}
+
+						logger.Info("repo file cached successfully (fallback)", "repo", repo, "filename", filename, "size", result.Size)
+						metrics.RecordCacheHit()
+						if err := s.ServePackage(w, repoFile); err != nil {
+							logger.Error("failed to serve repo file from cache", "path", repoFile, "error", err)
+						}
+						return
+					}
+					if err != nil {
+						logger.Error("failed to fetch repo file", "repo", repo, "filename", filename, "error", err)
+						w.WriteHeader(http.StatusInternalServerError)
+						fmt.Fprintf(w, "Failed to fetch repo file: %s", err.Error())
+						return
+					}
+				}
 			}
 		}
 
-		// Not found or not a FilesystemCache; fall through to not-found
+		// Not found or unsupported path
 		w.WriteHeader(http.StatusNotFound)
 		return
 	}
@@ -240,17 +289,17 @@ func (s *HTTPServer) handlePacmanRequest(w http.ResponseWriter, r *http.Request)
 
 	// Check if package exists in cache (repo-aware path)
 	var localPath string
-	if fc, ok := s.cacheManager.(*cache.FilesystemCache); ok {
-		localPath = filepath.Join(fc.GetStoragePath(), repo, "os", arch, filename)
-		if _, err := os.Stat(localPath); err == nil {
-			logger.Debug("serving from cache", "package", pkgName, "version", version)
-			metrics.RecordCacheHit()
-			if err := s.ServePackage(w, localPath); err != nil {
-				logger.Error("failed to serve cached package", "path", localPath, "error", err)
-			}
-			return
-		}
-	} else {
+			if fc, ok := s.cacheManager.(*cache.FilesystemCache); ok {
+				localPath = filepath.Join(fc.GetStoragePath(), repo, "os", arch, filename)
+				if _, err := os.Stat(localPath); err == nil {
+					logger.Debug("serving from cache", "package", pkgName, "version", version)
+					metrics.RecordCacheHit()
+					if err := s.ServePackage(w, localPath); err != nil {
+						logger.Error("failed to serve cached package", "path", localPath, "error", err)
+					}
+					return
+				}
+			} else {
 		// Fallback to cache manager interface if not a FilesystemCache
 		cacheExists, _ := s.cacheManager.Has(pkgName, version)
 		if cacheExists {
@@ -278,7 +327,26 @@ func (s *HTTPServer) handlePacmanRequest(w http.ResponseWriter, r *http.Request)
 	if s.fetchManager != nil {
 		result, err := s.fetchManager.FetchVersion(pkgName, version, upstreamPath)
 		if err == nil && result != nil {
-			// Move downloaded file to cache location
+			if fc, ok := s.cacheManager.(*cache.FilesystemCache); ok {
+				// Let cache place the file in the correct repo layout
+				if _, err := fc.PutPackageFile(repo, arch, filename, result.Path); err != nil {
+					logger.Error("failed to store package in cache", "from", result.Path, "to", localPath, "error", err)
+					w.WriteHeader(http.StatusInternalServerError)
+					fmt.Fprintf(w, "Failed to cache package: %s", err.Error())
+					return
+				}
+
+				logger.Info("package cached successfully", "package", pkgName, "version", version, "size", result.Size)
+				metrics.RecordCacheHit() // Record as hit after successful fetch and cache
+
+				// Serve from cache now
+				if err := s.ServePackage(w, localPath); err != nil {
+					logger.Error("failed to serve package from cache", "path", localPath, "error", err)
+				}
+				return
+			}
+
+			// Fallback: move using server helper
 			if err := s.moveFileToCache(result.Path, localPath); err != nil {
 				logger.Error("failed to move file to cache", "from", result.Path, "to", localPath, "error", err)
 				w.WriteHeader(http.StatusInternalServerError)
@@ -286,7 +354,7 @@ func (s *HTTPServer) handlePacmanRequest(w http.ResponseWriter, r *http.Request)
 				return
 			}
 
-			logger.Info("package cached successfully", "package", pkgName, "version", version, "size", result.Size)
+			logger.Info("package cached successfully (fallback)", "package", pkgName, "version", version, "size", result.Size)
 			metrics.RecordCacheHit() // Record as hit after successful fetch and cache
 
 			// Serve from cache now
@@ -515,10 +583,10 @@ func (s *HTTPServer) handleStatsRequest(w http.ResponseWriter, r *http.Request) 
 	stats := map[string]interface{}{
 		"timestamp": snapshot.Timestamp,
 		"downloads": map[string]interface{}{
-			"total":       snapshot.Downloads.Total,
-			"successful":  snapshot.Downloads.Successful,
-			"failed":      snapshot.Downloads.Failed,
-			"bytes_total": snapshot.Downloads.BytesTotal,
+			"total":           snapshot.Downloads.Total,
+			"successful":      snapshot.Downloads.Successful,
+			"failed":          snapshot.Downloads.Failed,
+			"bytes_total":     snapshot.Downloads.BytesTotal,
 			"avg_duration_ms": snapshot.Downloads.AvgDuration.Milliseconds(),
 		},
 		"cache": map[string]interface{}{
@@ -554,10 +622,10 @@ func (s *HTTPServer) handleHealth(w http.ResponseWriter, r *http.Request) {
 	activeRequests := atomic.LoadInt32(&s.activeRequests)
 
 	health := map[string]interface{}{
-		"status":           "ok",
-		"running":          s.IsRunning(),
-		"active_requests":  activeRequests,
-		"timestamp":        time.Now(),
+		"status":          "ok",
+		"running":         s.IsRunning(),
+		"active_requests": activeRequests,
+		"timestamp":       time.Now(),
 	}
 
 	w.Header().Set("Content-Type", "application/json")

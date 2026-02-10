@@ -2,6 +2,7 @@ package cache
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -300,4 +301,67 @@ func (fc *FilesystemCache) Cleanup() error {
 	}
 
 	return nil
+}
+
+// PutRepoFile moves or copies a repo-level file (e.g., core.db) into the repo layout:
+//   storage_path/<repo>/os/<arch>/<filename>
+// Returns the final path of the stored file.
+func (fc *FilesystemCache) PutRepoFile(repo, arch, filename, srcPath string) (string, error) {
+	if repo == "" || filename == "" {
+		return "", fmt.Errorf("repo and filename required")
+	}
+
+	destDir := filepath.Join(fc.storagePath, repo, "os", arch)
+	if err := os.MkdirAll(destDir, 0755); err != nil {
+		return "", fmt.Errorf("failed to create repo directory: %w", err)
+	}
+
+	dest := filepath.Join(destDir, filename)
+	if srcPath == dest {
+		return dest, nil
+	}
+
+	if err := os.Rename(srcPath, dest); err != nil {
+		// Fallback to copy+remove
+		if err := copyFile(srcPath, dest); err != nil {
+			return "", fmt.Errorf("failed to move repo file: %w", err)
+		}
+		if err := os.Remove(srcPath); err != nil {
+			logger.Warn("failed to remove src after copy", "path", srcPath, "error", err)
+		}
+	}
+
+	// Update metrics
+	packages, versions := fc.countPackagesAndVersions()
+	metrics.UpdateCacheStats(int64(packages), int64(versions))
+	return dest, nil
+}
+
+// PutPackageFile stores a package file into the repo layout (same as PutRepoFile)
+// Useful for packages fetched from mirrors.
+func (fc *FilesystemCache) PutPackageFile(repo, arch, filename, srcPath string) (string, error) {
+	return fc.PutRepoFile(repo, arch, filename, srcPath)
+}
+
+// copyFile copies src to dst. Overwrites existing dst.
+func copyFile(src, dst string) error {
+	in, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+
+	out, err := os.Create(dst)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		_ = out.Close()
+	}()
+
+	if _, err := io.Copy(out, in); err != nil {
+		return err
+	}
+
+	return out.Sync()
 }
