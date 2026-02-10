@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/tommahs/trinity-cache/internal/metrics"
+	"github.com/tommahs/trinity-cache/internal/cache"
 )
 
 // MockCache for testing
@@ -46,9 +47,9 @@ type CacheVersion struct {
 }
 
 func TestHTTPServer_New(t *testing.T) {
-	cache := &MockCache{}
-	server, err := NewHTTPServer(cache, ":9000")
-
+	// cacheManager, err := cache.NewFilesystemCache("/var/lib/trinity-cache")
+	cacheManager, err := cache.NewFilesystemCache("/var/lib/trinity-cache")
+	server, err := NewHTTPServer(cacheManager, ":9000", 30,30,)
 	if err != nil {
 		t.Fatalf("failed to create server: %v", err)
 	}
@@ -57,23 +58,26 @@ func TestHTTPServer_New(t *testing.T) {
 		t.Errorf("server should not be nil")
 	}
 
-	if server.cacheManager != cache {
+	if server.cacheManager != cacheManager {
 		t.Errorf("cache not set correctly")
 	}
 }
 
 func TestHTTPServer_New_NilCache(t *testing.T) {
-	_, err := NewHTTPServer(nil, ":9000")
+	_, err := NewHTTPServer(nil, ":9000", 30,30,)
 	if err == nil {
 		t.Errorf("expected error for nil cache")
 	}
 }
 
 func TestHTTPServer_StartAndShutdown(t *testing.T) {
-	cache := &MockCache{}
-	server, _ := NewHTTPServer(cache, ":0") // Use port 0 for automatic assignment
+	cacheManager, err := cache.NewFilesystemCache("/var/lib/trinity-cache")
+	if err != nil {
+		t.Fatalf("cacheManager cannot be created")
+	}
+	server, _ := NewHTTPServer(cacheManager, ":0", 30,30) // Use port 0 for automatic assignment
 
-	err := server.Start()
+	err = server.Start()
 	if err != nil {
 		t.Fatalf("failed to start server: %v", err)
 	}
@@ -96,21 +100,24 @@ func TestHTTPServer_StartAndShutdown(t *testing.T) {
 }
 
 func TestHTTPServer_DoubleStart(t *testing.T) {
-	cache := &MockCache{}
-	server, _ := NewHTTPServer(cache, ":0")
+	cacheManager, err := cache.NewFilesystemCache("/var/lib/trinity-cache")
+	server, _ := NewHTTPServer(cacheManager, ":0", 30, 30,)
 
 	server.Start()
 	defer server.Shutdown(context.Background())
 
-	err := server.Start()
+	err = server.Start()
 	if err == nil {
 		t.Errorf("expected error on double start")
 	}
 }
 
 func TestHTTPServer_HandleHealth(t *testing.T) {
-	cache := &MockCache{}
-	server, _ := NewHTTPServer(cache, ":0")
+	cacheManager, err := cache.NewFilesystemCache("/var/lib/trinity-cache")
+	if err != nil {
+		t.Errorf("expected error to be empty")
+	}
+	server, _ := NewHTTPServer(cacheManager, ":0", 30, 30,)
 
 	req := httptest.NewRequest("GET", "/health", nil)
 	w := httptest.NewRecorder()
@@ -134,8 +141,11 @@ func TestHTTPServer_HandleStats(t *testing.T) {
 	metrics.RecordCacheHit()
 	metrics.RecordCacheHit()
 
-	cache := &MockCache{}
-	server, _ := NewHTTPServer(cache, ":0")
+	cacheManager, err := cache.NewFilesystemCache("/var/lib/trinity-cache")
+	if err != nil {
+		t.Errorf("expected error to be empty")
+	}
+	server, _ := NewHTTPServer(cacheManager, ":0", 30, 30,)
 
 	req := httptest.NewRequest("GET", "/api/v1/stats", nil)
 	w := httptest.NewRecorder()
@@ -155,8 +165,11 @@ func TestHTTPServer_HandleStats(t *testing.T) {
 }
 
 func TestHTTPServer_HandleMetrics(t *testing.T) {
-	cache := &MockCache{}
-	server, _ := NewHTTPServer(cache, ":0")
+	cacheManager, err := cache.NewFilesystemCache("/var/lib/trinity-cache")
+	if err != nil {
+		t.Errorf("expected error to be empty")
+	}
+	server, _ := NewHTTPServer(cacheManager, ":0", 30, 30,)
 
 	req := httptest.NewRequest("GET", "/metrics", nil)
 	w := httptest.NewRecorder()
@@ -173,8 +186,11 @@ func TestHTTPServer_HandleMetrics(t *testing.T) {
 }
 
 func TestHTTPServer_HandlePackageRequest_GET(t *testing.T) {
-	cache := &MockCache{}
-	server, _ := NewHTTPServer(cache, ":0")
+	cacheManager, err := cache.NewFilesystemCache("/var/lib/trinity-cache")
+	if err != nil {
+		t.Errorf("expected error to be empty")
+	}
+	server, _ := NewHTTPServer(cacheManager, ":0", 30, 30,)
 
 	req := httptest.NewRequest("GET", "/api/v1/packages/myapp/1.0", nil)
 	w := httptest.NewRecorder()
@@ -187,8 +203,11 @@ func TestHTTPServer_HandlePackageRequest_GET(t *testing.T) {
 }
 
 func TestHTTPServer_HandlePackageRequest_HEAD(t *testing.T) {
-	cache := &MockCache{}
-	server, _ := NewHTTPServer(cache, ":0")
+	cacheManager, err := cache.NewFilesystemCache("/var/lib/trinity-cache")
+	if err != nil {
+		t.Errorf("expected error to be empty")
+	}
+	server, _ := NewHTTPServer(cacheManager, ":0", 30, 30,)
 
 	req := httptest.NewRequest("HEAD", "/api/v1/packages/myapp/1.0", nil)
 	w := httptest.NewRecorder()
@@ -201,8 +220,11 @@ func TestHTTPServer_HandlePackageRequest_HEAD(t *testing.T) {
 }
 
 func TestHTTPServer_HandlePackageRequest_MethodNotAllowed(t *testing.T) {
-	cache := &MockCache{}
-	server, _ := NewHTTPServer(cache, ":0")
+	cacheManager, err := cache.NewFilesystemCache("/var/lib/trinity-cache")
+	if err != nil {
+		t.Errorf("expected error to be empty")
+	}
+	server, _ := NewHTTPServer(cacheManager, ":0", 30, 30,)
 
 	req := httptest.NewRequest("POST", "/api/v1/packages/myapp/1.0", nil)
 	w := httptest.NewRecorder()
@@ -215,10 +237,16 @@ func TestHTTPServer_HandlePackageRequest_MethodNotAllowed(t *testing.T) {
 }
 
 func TestHTTPServer_SetCache(t *testing.T) {
-	cache1 := &MockCache{}
-	cache2 := &MockCache{}
+	cache1, err := cache.NewFilesystemCache("/var/lib/trinity-cache")
+	if err != nil {
+		t.Errorf("expected error to be empty")
+	}
+	cache2, err := cache.NewFilesystemCache("/var/lib/trinity-cache")
+	if err != nil {
+		t.Errorf("expected error to be empty")
+	}
 
-	server, _ := NewHTTPServer(cache1, ":0")
+	server, _ := NewHTTPServer(cache1, ":0",30,30)
 
 	if server.cacheManager != cache1 {
 		t.Errorf("cache1 not set initially")
@@ -238,33 +266,36 @@ func TestHTTPServer_SetCache(t *testing.T) {
 }
 
 func TestHTTPServer_FetchAndServe(t *testing.T) {
-	cache := &MockCache{}
-	server, _ := NewHTTPServer(cache, ":0")
+	cacheManager, err := cache.NewFilesystemCache("/var/lib/trinity-cache")
+	server, _ := NewHTTPServer(cacheManager, ":0", 30, 30,)
 
-	err := server.FetchAndServe("app", "1.0")
+	err = server.FetchAndServe("app", "1.0")
 	if err != nil {
 		t.Errorf("FetchAndServe should not error: %v", err)
 	}
 }
 
 func TestHTTPServer_GracefulShutdownWithTimeout(t *testing.T) {
-	cache := &MockCache{}
-	server, _ := NewHTTPServer(cache, ":0")
+	cacheManager, err := cache.NewFilesystemCache("/var/lib/trinity-cache")
+	server, _ := NewHTTPServer(cacheManager, ":0", 30, 30,)
 
 	server.Start()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
 	defer cancel()
 
-	err := server.Shutdown(ctx)
+	err = server.Shutdown(ctx)
 	if err != nil {
 		t.Fatalf("shutdown error: %v", err)
 	}
 }
 
 func TestHTTPServer_HandleFetchRequest_NoManager(t *testing.T) {
-	cache := &MockCache{}
-	server, _ := NewHTTPServer(cache, ":0")
+	cacheManager, err := cache.NewFilesystemCache("/var/lib/trinity-cache")
+	if err != nil {
+		t.Fatalf("cacheManager error: %v", err)
+	}
+	server, _ := NewHTTPServer(cacheManager, ":0", 30, 30,)
 
 	req := httptest.NewRequest("POST", "/api/v1/fetch/myapp/1.0", nil)
 	w := httptest.NewRecorder()
@@ -277,8 +308,11 @@ func TestHTTPServer_HandleFetchRequest_NoManager(t *testing.T) {
 }
 
 func TestHTTPServer_HandleFetchRequest_InvalidPath(t *testing.T) {
-	cache := &MockCache{}
-	server, _ := NewHTTPServer(cache, ":0")
+	cacheManager, err := cache.NewFilesystemCache("/var/lib/trinity-cache")
+	if err != nil {
+		t.Fatalf("cacheManager error: %v", err)
+	}
+	server, _ := NewHTTPServer(cacheManager, ":0", 30, 30,)
 
 	req := httptest.NewRequest("POST", "/api/v1/fetch/", nil)
 	w := httptest.NewRecorder()
@@ -291,8 +325,11 @@ func TestHTTPServer_HandleFetchRequest_InvalidPath(t *testing.T) {
 }
 
 func TestHTTPServer_HandleFetchRequest_MethodNotAllowed(t *testing.T) {
-	cache := &MockCache{}
-	server, _ := NewHTTPServer(cache, ":0")
+	cacheManager, err := cache.NewFilesystemCache("/var/lib/trinity-cache")
+	if err != nil {
+		t.Fatalf("cacheManager error: %v", err)
+	}
+	server, _ := NewHTTPServer(cacheManager, ":0", 30, 30,)
 
 	req := httptest.NewRequest("DELETE", "/api/v1/fetch/myapp/1.0", nil)
 	w := httptest.NewRecorder()
@@ -305,8 +342,11 @@ func TestHTTPServer_HandleFetchRequest_MethodNotAllowed(t *testing.T) {
 }
 
 func TestHTTPServer_SetFetchManager(t *testing.T) {
-	cache := &MockCache{}
-	server, _ := NewHTTPServer(cache, ":0")
+	cacheManager, err := cache.NewFilesystemCache("/var/lib/trinity-cache")
+	if err != nil {
+		t.Fatalf("cacheManager error: %v", err)
+	}
+	server, _ := NewHTTPServer(cacheManager, ":0", 30, 30,)
 
 	if server.fetchManager != nil {
 		t.Errorf("fetch manager should be nil initially")
@@ -320,8 +360,11 @@ func TestHTTPServer_SetFetchManager(t *testing.T) {
 	}
 }
 func TestHTTPServer_ParsePackageName_Valid(t *testing.T) {
-	cache := &MockCache{}
-	server, _ := NewHTTPServer(cache, ":0")
+	cacheManager, err := cache.NewFilesystemCache("/var/lib/trinity-cache")
+	if err != nil {
+		t.Fatalf("cacheManager error: %v", err)
+	}
+	server, _ := NewHTTPServer(cacheManager, ":0", 30, 30,)
 
 	tests := []struct {
 		filename    string
@@ -351,8 +394,11 @@ func TestHTTPServer_ParsePackageName_Valid(t *testing.T) {
 }
 
 func TestHTTPServer_ParsePackageName_Invalid(t *testing.T) {
-	cache := &MockCache{}
-	server, _ := NewHTTPServer(cache, ":0")
+	cacheManager, err := cache.NewFilesystemCache("/var/lib/trinity-cache")
+	if err != nil {
+		t.Fatalf("cacheManager error: %v", err)
+	}
+	server, _ := NewHTTPServer(cacheManager, ":0", 30, 30,)
 
 	tests := []struct {
 		filename string
@@ -373,8 +419,11 @@ func TestHTTPServer_ParsePackageName_Invalid(t *testing.T) {
 }
 
 func TestHTTPServer_HandlePacmanRequest_NotFound(t *testing.T) {
-	cache := &MockCache{}
-	server, _ := NewHTTPServer(cache, ":0")
+	cacheManager, err := cache.NewFilesystemCache("/var/lib/trinity-cache")
+	if err != nil {
+		t.Fatalf("cacheManager error: %v", err)
+	}
+	server, _ := NewHTTPServer(cacheManager, ":0", 30, 30,)
 
 	req := httptest.NewRequest("GET", "/nonexistent/os/x86_64/package.pkg.tar.zst", nil)
 	w := httptest.NewRecorder()
@@ -389,8 +438,11 @@ func TestHTTPServer_HandlePacmanRequest_NotFound(t *testing.T) {
 }
 
 func TestHTTPServer_HandlePacmanRequest_InvalidFormat(t *testing.T) {
-	cache := &MockCache{}
-	server, _ := NewHTTPServer(cache, ":0")
+	cacheManager, err := cache.NewFilesystemCache("/var/lib/trinity-cache")
+	if err != nil {
+		t.Fatalf("cacheManager error: %v", err)
+	}
+	server, _ := NewHTTPServer(cacheManager, ":0", 30, 30,)
 
 	// Invalid path format
 	req := httptest.NewRequest("GET", "/invalid/path/format", nil)
@@ -404,8 +456,11 @@ func TestHTTPServer_HandlePacmanRequest_InvalidFormat(t *testing.T) {
 }
 
 func TestHTTPServer_HandlePacmanRequest_MethodNotAllowed(t *testing.T) {
-	cache := &MockCache{}
-	server, _ := NewHTTPServer(cache, ":0")
+	cacheManager, err := cache.NewFilesystemCache("/var/lib/trinity-cache")
+	if err != nil {
+		t.Fatalf("cacheManager error: %v", err)
+	}
+	server, _ := NewHTTPServer(cacheManager, ":0", 30, 30,)
 
 	req := httptest.NewRequest("DELETE", "/core/os/x86_64/linux-6.7.1-1-x86_64.pkg.tar.zst", nil)
 	w := httptest.NewRecorder()
@@ -418,8 +473,11 @@ func TestHTTPServer_HandlePacmanRequest_MethodNotAllowed(t *testing.T) {
 }
 
 func TestHTTPServer_HandlePacmanRequest_CacheMiss_NoFetchManager(t *testing.T) {
-	cache := &MockCache{}
-	server, _ := NewHTTPServer(cache, ":0")
+	cacheManager, err := cache.NewFilesystemCache("/var/lib/trinity-cache")
+	if err != nil {
+		t.Fatalf("cacheManager error: %v", err)
+	}
+	server, _ := NewHTTPServer(cacheManager, ":0", 30, 30,)
 	server.fetchManager = nil // No fetch manager
 
 	// Request a package not in cache
@@ -434,8 +492,8 @@ func TestHTTPServer_HandlePacmanRequest_CacheMiss_NoFetchManager(t *testing.T) {
 }
 
 func TestHTTPServer_MoveFileToCache(t *testing.T) {
-	cache := &MockCache{}
-	server, _ := NewHTTPServer(cache, ":0")
+	cacheManager, err := cache.NewFilesystemCache("/var/lib/trinity-cache")
+	server, _ := NewHTTPServer(cacheManager, ":0", 30, 30,)
 
 	// Create a temporary source file
 	tempDir := t.TempDir()
@@ -474,8 +532,8 @@ func TestHTTPServer_MoveFileToCache(t *testing.T) {
 }
 
 func TestHTTPServer_MoveFileToCache_CreatesDirs(t *testing.T) {
-	cache := &MockCache{}
-	server, _ := NewHTTPServer(cache, ":0")
+	cacheManager, err := cache.NewFilesystemCache("/var/lib/trinity-cache")
+	server, _ := NewHTTPServer(cacheManager, ":0", 30, 30,)
 
 	// Create a temporary source file
 	tempDir := t.TempDir()
@@ -502,11 +560,14 @@ func TestHTTPServer_MoveFileToCache_CreatesDirs(t *testing.T) {
 }
 
 func TestHTTPServer_MoveFileToCache_EmptyPaths(t *testing.T) {
-	cache := &MockCache{}
-	server, _ := NewHTTPServer(cache, ":0")
+	cacheManager, err := cache.NewFilesystemCache("/var/lib/trinity-cache")
+	if err != nil {
+		t.Fatalf("cacheManager error: %v", err)
+	}
+	server, _ := NewHTTPServer(cacheManager, ":0", 30, 30,)
 
 	// Test with empty src
-	err := server.moveFileToCache("", "/some/path")
+	err = server.moveFileToCache("", "/some/path")
 	if err == nil {
 		t.Errorf("expected error for empty source path")
 	}
