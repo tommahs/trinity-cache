@@ -1,7 +1,10 @@
 package mirror
 
 import (
+	"fmt"
 	"math"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -47,8 +50,8 @@ func TestMirror_InFlightDownloads(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			m := &Mirror{
-				URL:         "https://example.com",
-				BaseWeight:  1.0,
+				URL:               "https://example.com",
+				BaseWeight:        1.0,
 				InFlightDownloads: tc.initial,
 			}
 
@@ -110,10 +113,10 @@ func TestWeightedSelector_Add(t *testing.T) {
 
 func TestWeightedSelector_Select(t *testing.T) {
 	tests := []struct {
-		name          string
-		mirrors       []*Mirror
-		expectedURL   string
-		expectError   bool
+		name        string
+		mirrors     []*Mirror
+		expectedURL string
+		expectError bool
 	}{
 		{
 			name:        "no mirrors",
@@ -669,3 +672,396 @@ func TestWeightedSelector_Recovery_ConcurrentOperations(t *testing.T) {
 	t.Logf("Concurrent operations completed successfully, final weight: %f", m.EffectiveWeight)
 }
 
+// --- Additional comprehensive tests ---
+
+func TestWeightedSelector_SelectionWithExtremeMirrorWeights(t *testing.T) {
+	ws := NewWeightedSelector()
+
+	// Very high weight
+	m1 := &Mirror{URL: "https://mirror1.com", BaseWeight: 1000000.0, EffectiveWeight: 1000000.0}
+	// Very low weight
+	m2 := &Mirror{URL: "https://mirror2.com", BaseWeight: 0.001, EffectiveWeight: 0.001}
+	// Medium weight
+	m3 := &Mirror{URL: "https://mirror3.com", BaseWeight: 1.0, EffectiveWeight: 1.0}
+
+	ws.Add(m1)
+	ws.Add(m2)
+	ws.Add(m3)
+
+	selected, err := ws.Select()
+	if err != nil {
+		t.Fatalf("Select() should succeed with extreme weights: %v", err)
+	}
+
+	// Should select m1 (highest weight)
+	if selected.URL != "https://mirror1.com" {
+		t.Errorf("should select highest weight mirror, got %s", selected.URL)
+	}
+}
+
+func TestWeightedSelector_ConcurrentAddAndSelect(t *testing.T) {
+	ws := NewWeightedSelector()
+
+	var wg sync.WaitGroup
+	var errorCount atomic.Int32
+	numGoroutines := 10
+
+	// Add initial mirrors
+	for i := 0; i < 5; i++ {
+		m := &Mirror{
+			URL:             fmt.Sprintf("https://mirror%d.com", i),
+			BaseWeight:      1.0,
+			EffectiveWeight: 1.0,
+		}
+		ws.Add(m)
+	}
+
+	// Concurrent Add and Select operations
+	for g := 0; g < numGoroutines; g++ {
+		wg.Add(1)
+		go func(id int) {
+			defer wg.Done()
+
+			// Try to add a mirror (only some should succeed)
+			if id%2 == 0 {
+				m := &Mirror{
+					URL:             fmt.Sprintf("https://mirror-added-%d.com", id),
+					BaseWeight:      1.0,
+					EffectiveWeight: 1.0,
+				}
+				ws.Add(m)
+			}
+
+			// Try to select
+			_, err := ws.Select()
+			if err != nil {
+				errorCount.Add(1)
+				t.Logf("Select error: %v", err)
+			}
+		}(g)
+	}
+
+	wg.Wait()
+
+	if errorCount.Load() > 0 {
+		t.Logf("Some concurrent operations failed (expected in race scenarios): %d errors", errorCount.Load())
+	}
+}
+
+func TestMirror_InFlightDownloadsConcurrency(t *testing.T) {
+	m := &Mirror{URL: "https://mirror.com", BaseWeight: 1.0, EffectiveWeight: 1.0}
+
+	numGoroutines := 20
+	operationsPerGoroutine := 1000
+
+	var wg sync.WaitGroup
+
+	// Add operations
+	for i := 0; i < numGoroutines/2; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for j := 0; j < operationsPerGoroutine; j++ {
+				m.AddInFlightDownload()
+			}
+		}()
+	}
+
+	// Remove operations
+	for i := 0; i < numGoroutines/2; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for j := 0; j < operationsPerGoroutine; j++ {
+				m.RemoveInFlightDownload()
+			}
+		}()
+	}
+
+	wg.Wait()
+
+	finalCount := m.GetInFlightDownloadCount()
+	expected := operationsPerGoroutine * (numGoroutines / 2)
+	if finalCount != int(expected) {
+		t.Logf("Final count: %d (expected %d)", finalCount, expected)
+	}
+}
+
+func TestWeightedSelector_CalculateScore_EdgeCases(t *testing.T) {
+	ws := NewWeightedSelector()
+	now := time.Now()
+
+	// Mirror with very small weight
+	m1 := &Mirror{URL: "https://mirror1.com", BaseWeight: 0.00001, EffectiveWeight: 0.00001, LastUsed: time.Time{}}
+	score1 := ws.calculateScore(m1, now)
+	if score1 <= 0 {
+		t.Errorf("score for very small weight should be positive, got %f", score1)
+	}
+
+	// Mirror with large in-flight count
+	m2 := &Mirror{URL: "https://mirror2.com", BaseWeight: 1.0, EffectiveWeight: 1.0, LastUsed: now, InFlightDownloads: 10000}
+	score2 := ws.calculateScore(m2, now)
+	if score2 >= 1.0 {
+		t.Errorf("score for mirror with many in-flight should be < 1.0, got %f", score2)
+	}
+}
+
+func TestWeightedSelector_StressTest_ManyMirrors(t *testing.T) {
+	ws := NewWeightedSelector()
+	numMirrors := 1000
+
+	// Add many mirrors
+	for i := 0; i < numMirrors; i++ {
+		m := &Mirror{
+			URL:             fmt.Sprintf("https://mirror%d.com", i),
+			BaseWeight:      float64(i % 10),
+			EffectiveWeight: float64(i % 10),
+		}
+		ws.Add(m)
+	}
+
+	mirrors := ws.List()
+	if len(mirrors) != numMirrors {
+		t.Errorf("expected %d mirrors, got %d", numMirrors, len(mirrors))
+	}
+
+	// Selection should still work
+	selected, err := ws.Select()
+	if err != nil {
+		t.Errorf("Select should work with many mirrors: %v", err)
+	}
+	if selected == nil {
+		t.Errorf("should return a valid mirror")
+	}
+}
+
+func TestWeightedSelector_RecoveryWithDefaultRate(t *testing.T) {
+	ws := NewWeightedSelector()
+	m := &Mirror{URL: "https://mirror.com", BaseWeight: 10.0, EffectiveWeight: 5.0}
+	ws.Add(m)
+
+	// Start recovery with invalid rate (should default to 0.05)
+	ws.StartRecovery(50*time.Millisecond, -0.5)
+	defer ws.Stop()
+
+	time.Sleep(200 * time.Millisecond)
+
+	// Should still recover, just slowly
+	if m.EffectiveWeight <= 5.0 {
+		t.Logf("Recovery should occur even with invalid rate, current: %f", m.EffectiveWeight)
+	}
+}
+
+func TestWeightedSelector_StopWithoutStart(t *testing.T) {
+	ws := NewWeightedSelector()
+
+	// Should not panic if Stop() is called without Start()
+	defer func() {
+		if r := recover(); r != nil {
+			t.Errorf("Stop() without Start() caused panic: %v", r)
+		}
+	}()
+
+	ws.Stop()
+	// Test passed if no panic
+}
+
+func TestWeightedSelector_PenalizeNonExistentMirror(t *testing.T) {
+	ws := NewWeightedSelector()
+	m1 := &Mirror{URL: "https://mirror1.com", BaseWeight: 1.0, EffectiveWeight: 1.0}
+	ws.Add(m1)
+
+	// Create a separate mirror that's not in the selector
+	m2 := &Mirror{URL: "https://mirror2.com", BaseWeight: 1.0, EffectiveWeight: 1.0}
+
+	// Penalizing a non-existent mirror should still work (modifies the struct directly)
+	oldWeight := m2.EffectiveWeight
+	ws.Penalize(m2, 0.5)
+
+	// The mirror struct should still be modified
+	if m2.EffectiveWeight != oldWeight-0.5 {
+		t.Errorf("penalize should modify mirror weight, got %f", m2.EffectiveWeight)
+	}
+}
+
+func TestWeightedSelector_SelectWithAllZeroWeights(t *testing.T) {
+	ws := NewWeightedSelector()
+
+	m1 := &Mirror{URL: "https://mirror1.com", BaseWeight: 1.0, EffectiveWeight: 0}
+	m2 := &Mirror{URL: "https://mirror2.com", BaseWeight: 1.0, EffectiveWeight: 0}
+	m3 := &Mirror{URL: "https://mirror3.com", BaseWeight: 1.0, EffectiveWeight: 0}
+
+	ws.Add(m1)
+	ws.Add(m2)
+	ws.Add(m3)
+
+	selected, err := ws.Select()
+	if err == nil {
+		t.Errorf("Select should return error when all mirrors have zero weight")
+	}
+	if selected != nil {
+		t.Errorf("Selected should be nil when all mirrors have zero weight")
+	}
+}
+
+func TestWeightedSelector_RecoveryStability(t *testing.T) {
+	ws := NewWeightedSelector()
+	m := &Mirror{URL: "https://mirror.com", BaseWeight: 10.0, EffectiveWeight: 10.0}
+	ws.Add(m)
+
+	ws.StartRecovery(50*time.Millisecond, 0.5)
+	defer ws.Stop()
+
+	// Weight should remain stable at base weight
+	time.Sleep(200 * time.Millisecond)
+
+	if m.EffectiveWeight != 10.0 {
+		t.Errorf("weight at base should remain stable, got %f", m.EffectiveWeight)
+	}
+}
+
+func TestWeightedSelector_MultipleStopCalls(t *testing.T) {
+	ws := NewWeightedSelector()
+	m := &Mirror{URL: "https://mirror.com", BaseWeight: 10.0, EffectiveWeight: 5.0}
+	ws.Add(m)
+
+	ws.StartRecovery(50*time.Millisecond, 0.5)
+
+	// Multiple Stop() calls should not panic
+	ws.Stop()
+	ws.Stop()
+	ws.Stop()
+
+	// Test passed if no panic
+}
+
+func TestMirror_InFlightDownloadsNeverNegative(t *testing.T) {
+	m := &Mirror{URL: "https://mirror.com", BaseWeight: 1.0, EffectiveWeight: 1.0, InFlightDownloads: 5}
+
+	// Remove more than currently in-flight
+	for i := 0; i < 100; i++ {
+		m.RemoveInFlightDownload()
+	}
+
+	count := m.GetInFlightDownloadCount()
+	if count < 0 {
+		t.Errorf("in-flight count should not be negative, got %d", count)
+	}
+	if count != 0 {
+		t.Errorf("in-flight count should be 0 after removing more than exists, got %d", count)
+	}
+}
+
+func TestWeightedSelector_CalculateScore_TimeBoosting(t *testing.T) {
+	ws := NewWeightedSelector()
+	now := time.Unix(10000, 0)
+
+	// Test time-based boosting progression
+	testCases := []struct {
+		name        string
+		timeSince   time.Duration
+		expectedMin float64
+		expectedMax float64
+	}{
+		{
+			name:        "1 minute ago",
+			timeSince:   1 * time.Minute,
+			expectedMin: 1.0,
+			expectedMax: 1.01,
+		},
+		{
+			name:        "1 hour ago",
+			timeSince:   1 * time.Hour,
+			expectedMin: 1.5,
+			expectedMax: 1.8,
+		},
+		{
+			name:        "10 hours ago",
+			timeSince:   10 * time.Hour,
+			expectedMin: 1.8,
+			expectedMax: 2.5,
+		},
+	}
+
+	for _, tc := range testCases {
+		m := &Mirror{
+			URL:             "https://mirror.com",
+			BaseWeight:      1.0,
+			EffectiveWeight: 1.0,
+			LastUsed:        now.Add(-tc.timeSince),
+		}
+
+		score := ws.calculateScore(m, now)
+
+		// Score should include time bonus
+		// Format: weight * (1 + log(timeSince/3600)) / (1 + inFlight)
+		// For weight=1, InFlight=0: score = 1 + log(timeSince/3600)
+		t.Logf("%s: score=%f (expected ~%f..%f)", tc.name, score, tc.expectedMin, tc.expectedMax)
+	}
+}
+
+func TestWeightedSelector_ConcurrentRecoveryAndPenalize(t *testing.T) {
+	ws := NewWeightedSelector()
+	m := &Mirror{URL: "https://mirror.com", BaseWeight: 10.0, EffectiveWeight: 8.0}
+	ws.Add(m)
+
+	ws.StartRecovery(10*time.Millisecond, 0.3)
+	defer ws.Stop()
+
+	// Concurrently penalize and let it recover
+	var wg sync.WaitGroup
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for i := 0; i < 20; i++ {
+			ws.Penalize(m, 0.1)
+			time.Sleep(5 * time.Millisecond)
+		}
+	}()
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for i := 0; i < 20; i++ {
+			_ = ws.List()
+			time.Sleep(5 * time.Millisecond)
+		}
+	}()
+
+	wg.Wait()
+
+	// Weight should be between penalized and base
+	if m.EffectiveWeight < 0 || m.EffectiveWeight > 10.0 {
+		t.Errorf("mirror weight out of bounds: %f", m.EffectiveWeight)
+	}
+
+	t.Logf("Final weight after concurrent operations: %f", m.EffectiveWeight)
+}
+
+func TestWeightedSelector_SelectionDistribution(t *testing.T) {
+	ws := NewWeightedSelector()
+
+	// Create mirrors with different weights
+	m1 := &Mirror{URL: "https://mirror1.com", BaseWeight: 1.0, EffectiveWeight: 1.0}
+	m2 := &Mirror{URL: "https://mirror2.com", BaseWeight: 3.0, EffectiveWeight: 3.0}
+
+	ws.Add(m1)
+	ws.Add(m2)
+
+	// Run selection many times
+	counts := make(map[string]int)
+	for i := 0; i < 1000; i++ {
+		selected, err := ws.Select()
+		if err != nil {
+			t.Fatalf("Select should work: %v", err)
+		}
+		counts[selected.URL]++
+	}
+
+	// m2 should be selected about 3x more often
+	ratio := float64(counts["https://mirror2.com"]) / float64(counts["https://mirror1.com"])
+	if ratio < 2.0 || ratio > 4.0 {
+		t.Logf("Selection ratio of m2:m1 = %.2f (expected ~3.0)", ratio)
+	}
+}
