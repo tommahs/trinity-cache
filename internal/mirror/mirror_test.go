@@ -484,13 +484,17 @@ func TestWeightedSelector_StartRecovery_RecoveryIncreases(t *testing.T) {
 
 	time.Sleep(250 * time.Millisecond) // Wait for multiple recovery cycles
 
+	ws.mu.RLock()
+	finalWeight := m.EffectiveWeight
+	ws.mu.RUnlock()
+
 	// Effective weight should have increased from 5.0 toward 10.0
 	// With 50% recovery rate: 5 -> 7.5 -> 8.75 -> etc.
-	if m.EffectiveWeight <= 5.0 {
-		t.Errorf("mirror weight should have increased, got %f", m.EffectiveWeight)
+	if finalWeight <= 5.0 {
+		t.Errorf("mirror weight should have increased, got %f", finalWeight)
 	}
-	if m.EffectiveWeight > 10.0 {
-		t.Errorf("mirror weight should not exceed base weight, got %f", m.EffectiveWeight)
+	if finalWeight > 10.0 {
+		t.Errorf("mirror weight should not exceed base weight, got %f", finalWeight)
 	}
 }
 
@@ -504,14 +508,17 @@ func TestWeightedSelector_StartRecovery_DoesNotExceedBaseWeight(t *testing.T) {
 
 	time.Sleep(500 * time.Millisecond) // Wait for many recovery cycles
 
+	ws.mu.RLock()
+	finalWeight := m.EffectiveWeight
+	ws.mu.RUnlock()
 	// Effective weight should converge to base weight but not exceed it
-	if m.EffectiveWeight > m.BaseWeight {
-		t.Errorf("effective weight exceeded base weight: %f > %f", m.EffectiveWeight, m.BaseWeight)
+	if finalWeight > m.BaseWeight {
+		t.Errorf("effective weight exceeded base weight: %f > %f", finalWeight, m.BaseWeight)
 	}
 
 	// Should be very close to base weight after many cycles
-	if math.Abs(m.EffectiveWeight-m.BaseWeight) > 0.1 {
-		t.Logf("mirror weight recovered to %f (expected ~%f)", m.EffectiveWeight, m.BaseWeight)
+	if math.Abs(finalWeight-m.BaseWeight) > 0.1 {
+		t.Logf("mirror weight recovered to %f (expected ~%f)", finalWeight, m.BaseWeight)
 	}
 }
 
@@ -528,8 +535,11 @@ func TestWeightedSelector_StartRecovery_MultipleCallsIgnored(t *testing.T) {
 
 	time.Sleep(150 * time.Millisecond)
 
+	ws.mu.RLock()
+	finalWeight := m.EffectiveWeight
+	ws.mu.RUnlock()
 	// Should still work normally (weight should recover)
-	if m.EffectiveWeight <= 5.0 {
+	if finalWeight <= 5.0 {
 		t.Errorf("recovery should still work after second start call")
 	}
 }
@@ -545,10 +555,14 @@ func TestWeightedSelector_Recovery_RespectsRecoveryRate(t *testing.T) {
 
 	time.Sleep(100 * time.Millisecond)
 
+	ws.mu.RLock()
+	finalWeight := m.EffectiveWeight
+	ws.mu.RUnlock()
+
 	// With only 2 cycles at 10% rate:
 	// 5.0 -> 5.5 (5 + 0.1*5) -> 5.95
-	if m.EffectiveWeight > 6.5 {
-		t.Errorf("recovery rate too high, expected < 6.5, got %f", m.EffectiveWeight)
+	if finalWeight > 6.5 {
+		t.Errorf("recovery rate too high, expected < 6.5, got %f", finalWeight)
 	}
 }
 
@@ -567,19 +581,25 @@ func TestWeightedSelector_Recovery_MultipleMirrors(t *testing.T) {
 
 	time.Sleep(250 * time.Millisecond)
 
+	ws.mu.RLock()
+	m1finalWeight := m1.EffectiveWeight
+	m2finalWeight := m2.EffectiveWeight
+	m3finalWeight := m3.EffectiveWeight
+	ws.mu.RUnlock()
+
 	// m1 should have increased
-	if m1.EffectiveWeight <= 3.0 {
+	if m1finalWeight <= 3.0 {
 		t.Errorf("m1 should have recovered")
 	}
 
 	// m2 should have increased
-	if m2.EffectiveWeight <= 1.0 {
+	if m2finalWeight <= 1.0 {
 		t.Errorf("m2 should have recovered")
 	}
 
 	// m3 should remain at base weight
-	if m3.EffectiveWeight != 8.0 {
-		t.Errorf("m3 should stay at base weight, got %f", m3.EffectiveWeight)
+	if m3finalWeight != 8.0 {
+		t.Errorf("m3 should stay at base weight, got %f", m3finalWeight)
 	}
 }
 
@@ -593,21 +613,29 @@ func TestWeightedSelector_PenalizeAndRecover_Cycle(t *testing.T) {
 
 	// Penalize the mirror
 	ws.Penalize(m, 5.0)
-	if m.EffectiveWeight != 5.0 {
-		t.Errorf("penalty failed: expected 5.0, got %f", m.EffectiveWeight)
+	ws.mu.RLock()
+	PenalizedWeight := m.EffectiveWeight
+	ws.mu.RUnlock()
+
+	if PenalizedWeight != 5.0 {
+		t.Errorf("penalty failed: expected 5.0, got %f", PenalizedWeight)
 	}
 
 	// Let it recover
 	time.Sleep(200 * time.Millisecond)
 
+	ws.mu.RLock()
+	finalWeight := m.EffectiveWeight
+	ws.mu.RUnlock()
+
 	// Weight should have increased again
-	if m.EffectiveWeight <= 5.0 {
+	if finalWeight <= 5.0 {
 		t.Errorf("mirror should have recovered from penalty")
 	}
 
 	// But should not exceed base weight
-	if m.EffectiveWeight > 10.0 {
-		t.Errorf("effective weight exceeded base weight: %f", m.EffectiveWeight)
+	if finalWeight > 10.0 {
+		t.Errorf("effective weight exceeded base weight: %f", finalWeight)
 	}
 }
 
@@ -825,9 +853,13 @@ func TestWeightedSelector_RecoveryWithDefaultRate(t *testing.T) {
 
 	time.Sleep(200 * time.Millisecond)
 
+	ws.mu.RLock()
+	finalWeight := m.EffectiveWeight
+	ws.mu.RUnlock()
+
 	// Should still recover, just slowly
-	if m.EffectiveWeight <= 5.0 {
-		t.Logf("Recovery should occur even with invalid rate, current: %f", m.EffectiveWeight)
+	if finalWeight <= 5.0 {
+		t.Logf("Recovery should occur even with invalid rate, current: %f", finalWeight)
 	}
 }
 
@@ -994,13 +1026,16 @@ func TestWeightedSelector_ConcurrentRecoveryAndPenalize(t *testing.T) {
 	}()
 
 	wg.Wait()
+	ws.mu.RLock()
+	finalWeight := m.EffectiveWeight
+	ws.mu.RUnlock()
 
 	// Weight should be between penalized and base
-	if m.EffectiveWeight < 0 || m.EffectiveWeight > 10.0 {
-		t.Errorf("mirror weight out of bounds: %f", m.EffectiveWeight)
+	if finalWeight < 0 || finalWeight > 10.0 {
+		t.Errorf("mirror weight out of bounds: %f", finalWeight)
 	}
 
-	t.Logf("Final weight after concurrent operations: %f", m.EffectiveWeight)
+	t.Logf("Final weight after concurrent operations: %f", finalWeight)
 }
 
 func TestWeightedSelector_SelectionDistribution(t *testing.T) {
