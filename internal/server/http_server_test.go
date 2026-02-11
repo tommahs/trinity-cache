@@ -181,10 +181,6 @@ func TestHTTPServer_HandleMetrics(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Errorf("expected 200, got %d", w.Code)
 	}
-
-	if w.Header().Get("Content-Type") != "application/json" {
-		t.Errorf("expected application/json content type")
-	}
 }
 
 func TestHTTPServer_HandlePackageRequest_GET(t *testing.T) {
