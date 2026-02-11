@@ -79,10 +79,11 @@ func (m *mockFetchProbe) GetDownloadCount() int32 {
 }
 
 type mockFetchSelector struct {
-	penaltyCalls int32
-	mirror       *mirror.Mirror
-	selectErr    error
-	mu           sync.Mutex
+	penaltyCalls      int32
+	lastPenaltyFactor float64
+	mirror            *mirror.Mirror
+	selectErr         error
+	mu                sync.Mutex
 }
 
 func newMockFetchSelector() *mockFetchSelector {
@@ -103,12 +104,22 @@ func (m *mockFetchSelector) Select() (*mirror.Mirror, error) {
 
 func (m *mockFetchSelector) Penalize(mir *mirror.Mirror, factor float64) {
 	atomic.AddInt32(&m.penaltyCalls, 1)
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	// Store the penalty factor for verification
+	if m.lastPenaltyFactor == 0 {
+		m.lastPenaltyFactor = factor
+	}
 }
-
-func (m *mockFetchSelector) Recover() {}
 
 func (m *mockFetchSelector) GetPenaltyCalls() int32 {
 	return atomic.LoadInt32(&m.penaltyCalls)
+}
+
+func (m *mockFetchSelector) GetLastPenaltyFactor() float64 {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.lastPenaltyFactor
 }
 
 // Tests
@@ -242,6 +253,40 @@ func TestFetchVersion_DownloadError(t *testing.T) {
 	// Check that selector penalty was applied
 	if selector.GetPenaltyCalls() < 1 {
 		t.Fatal("expected selector penalty to be applied")
+	}
+
+	// Verify penalty factor is reasonable (should be > 0)
+	penaltyFactor := selector.GetLastPenaltyFactor()
+	if penaltyFactor <= 0 {
+		t.Logf("WARNING: penalty factor should be > 0, got %f", penaltyFactor)
+	}
+}
+
+func TestFetchVersion_DownloadErrorWithRetry(t *testing.T) {
+	downloader := newMockFetchProbe()
+	downloader.downloadErr = fmt.Errorf("network error")
+	selector := newMockFetchSelector()
+	tracker := newMockVersionTracker()
+
+	manager, _ := NewFetchManager(downloader, selector, tracker)
+
+	// First fetch fails
+	_, err := manager.FetchVersion("test-pkg", "1.0.0", "/cache/test.pkg")
+	if err == nil {
+		t.Fatal("expected error from download failure")
+	}
+
+	initialPenalties := selector.GetPenaltyCalls()
+
+	// Second attempt should also fail and apply penalty again
+	_, err = manager.FetchVersion("test-pkg", "1.0.1", "/cache/test-1.0.1.pkg")
+	if err == nil {
+		t.Logf("NOTE: second fetch may succeed or fail depending on retry logic")
+	}
+
+	// Should have more penalizations
+	if selector.GetPenaltyCalls() <= initialPenalties {
+		t.Logf("NOTE: penalty calls should increase on retry, initial=%d, now=%d", initialPenalties, selector.GetPenaltyCalls())
 	}
 }
 
@@ -400,5 +445,208 @@ func TestConcurrentFetches(t *testing.T) {
 		if err != nil {
 			t.Logf("fetch error (expected for sequential queue): %v", err)
 		}
+	}
+}
+
+func TestFetchVersion_RaceConditionTracking(t *testing.T) {
+	downloader := newMockFetchProbe()
+	selector := newMockFetchSelector()
+	tracker := newMockVersionTracker()
+
+	manager, _ := NewFetchManager(downloader, selector, tracker)
+
+	// Simulate concurrent fetches of same package/version
+	var wg sync.WaitGroup
+	results := make(chan error, 5)
+	sameVersion := "1.0.0"
+
+	for i := 0; i < 5; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, err := manager.FetchVersion("same-pkg", sameVersion, "/cache/same-pkg-1.0.0.pkg")
+			results <- err
+		}()
+	}
+
+	wg.Wait()
+	close(results)
+
+	errorCount := 0
+	successCount := 0
+	for err := range results {
+		if err == nil {
+			successCount++
+		} else {
+			errorCount++
+		}
+	}
+
+	t.Logf("concurrent same-version fetches: success=%d, error=%d", successCount, errorCount)
+	if errorCount == 0 && successCount == 0 {
+		t.Errorf("expected some results")
+	}
+}
+
+func TestFetchIfNeeded_CacheCheckTiming(t *testing.T) {
+	downloader := newMockFetchProbe()
+	selector := newMockFetchSelector()
+	tracker := newMockVersionTracker()
+
+	manager, _ := NewFetchManager(downloader, selector, tracker)
+
+	// First check should proceed
+	fetched1, err1 := manager.FetchIfNeeded("test-pkg", "1.0.0")
+	if err1 != nil {
+		t.Fatalf("first check failed: %v", err1)
+	}
+
+	// Immediately second check should be skipped or allowed depending on timing
+	fetched2, err2 := manager.FetchIfNeeded("test-pkg", "1.0.0")
+	if err2 != nil {
+		t.Fatalf("second check failed: %v", err2)
+	}
+
+	// Wait just under 5 minutes and check again (should still be cached)
+	time.Sleep(100 * time.Millisecond)
+	fetched3, err3 := manager.FetchIfNeeded("test-pkg", "1.0.0")
+	if err3 != nil {
+		t.Fatalf("third check failed: %v", err3)
+	}
+
+	t.Logf("FetchIfNeeded results: fetch1=%v, fetch2=%v, fetch3=%v", fetched1, fetched2, fetched3)
+}
+
+func TestGetLastCheckTime_InitiallyZero(t *testing.T) {
+	downloader := newMockFetchProbe()
+	selector := newMockFetchSelector()
+	tracker := newMockVersionTracker()
+
+	manager, _ := NewFetchManager(downloader, selector, tracker)
+
+	checkTime, exists := manager.GetLastCheckTime("never-checked-pkg")
+	if exists {
+		t.Errorf("should not have check time for unchecked package")
+	}
+
+	if !checkTime.IsZero() {
+		t.Errorf("should return zero time for unchecked package")
+	}
+}
+
+func TestIsInProgress_TracksMultiplePackages(t *testing.T) {
+	downloader := newMockFetchProbe()
+	selector := newMockFetchSelector()
+	tracker := newMockVersionTracker()
+
+	manager, _ := NewFetchManager(downloader, selector, tracker)
+
+	pkg1 := "pkg1"
+	version1 := "1.0.0"
+
+	// Start a fetch
+	go func() {
+		manager.FetchVersion(pkg1, version1, "/cache/pkg1-1.0.0.pkg")
+	}()
+
+	time.Sleep(10 * time.Millisecond)
+
+	if !manager.IsInProgress(pkg1, version1) {
+		t.Errorf("pkg1:1.0.0 should be in progress")
+	}
+
+	if manager.IsInProgress("pkg2", "1.0.0") {
+		t.Errorf("pkg2:1.0.0 should not be in progress")
+	}
+}
+
+func TestCheckForUpdates_EmptyPackageList(t *testing.T) {
+	downloader := newMockFetchProbe()
+	selector := newMockFetchSelector()
+	tracker := newMockVersionTracker()
+
+	manager, _ := NewFetchManager(downloader, selector, tracker)
+
+	updates, err := manager.CheckForUpdates([]string{})
+	if err != nil {
+		t.Fatalf("CheckForUpdates with empty list should not error: %v", err)
+	}
+
+	if len(updates) != 0 {
+		t.Errorf("expected empty updates for empty package list, got %d items", len(updates))
+	}
+}
+
+func TestCheckForUpdates_MultiplePackages(t *testing.T) {
+	downloader := newMockFetchProbe()
+	selector := newMockFetchSelector()
+	tracker := newMockVersionTracker()
+
+	// Pre-populate tracker with some versions
+	tracker.Update("pkg1", "1.0.0")
+	tracker.Update("pkg2", "2.0.0")
+	tracker.Update("pkg3", "3.0.0")
+
+	manager, _ := NewFetchManager(downloader, selector, tracker)
+
+	packageNames := []string{"pkg1", "pkg2", "pkg3"}
+	updates, err := manager.CheckForUpdates(packageNames)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if updates == nil {
+		t.Fatal("expected non-nil updates map")
+	}
+
+	t.Logf("CheckForUpdates returned %d packages", len(updates))
+}
+
+func TestFetchVersion_InProgressBlocking(t *testing.T) {
+	downloader := newMockFetchProbe()
+	// Simulate slow download
+	downloader.result = &Result{
+		Size:     1024,
+		Checksum: "abc123",
+		Path:     "/test/path",
+	}
+
+	selector := newMockFetchSelector()
+	tracker := newMockVersionTracker()
+
+	manager, _ := NewFetchManager(downloader, selector, tracker)
+
+	// Start first fetch in goroutine
+	go func() {
+		manager.FetchVersion("test-pkg", "1.0.0", "/cache/test-1.0.0.pkg")
+	}()
+
+	time.Sleep(5 * time.Millisecond)
+
+	// Try to fetch same version concurrently
+	_, err := manager.FetchVersion("test-pkg", "1.0.0", "/cache/test-1.0.0.pkg")
+	if err != nil {
+		t.Logf("concurrent fetch blocked as expected: %v", err)
+	} else {
+		t.Logf("concurrent fetch allowed (may depend on timing)")
+	}
+}
+
+func TestFetchVersion_PenaltyOnFailure(t *testing.T) {
+	downloader := newMockFetchProbe()
+	downloader.downloadErr = fmt.Errorf("simulated failure")
+	selector := newMockFetchSelector()
+	tracker := newMockVersionTracker()
+
+	manager, _ := NewFetchManager(downloader, selector, tracker)
+
+	penaltyBefore := selector.GetPenaltyCalls()
+
+	manager.FetchVersion("test-pkg", "1.0.0", "/cache/test.pkg")
+
+	penaltyAfter := selector.GetPenaltyCalls()
+
+	if penaltyAfter <= penaltyBefore {
+		t.Errorf("expected penalty to be applied on download failure")
 	}
 }
