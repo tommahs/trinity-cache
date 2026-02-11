@@ -1,3 +1,4 @@
+//Package main implements Trinity-cache.
 package main
 
 import (

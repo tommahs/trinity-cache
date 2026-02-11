@@ -1,12 +1,11 @@
+// Package logger provides structured logging for Trinity-cache using Go's standard log/slog.
+// Following Go philosophy: simple, explicit, and using the standard library.
 package logger
 
 import (
 	"log/slog"
 	"os"
 )
-
-// Package logger provides structured logging for Trinity-cache using Go's standard log/slog.
-// Following Go philosophy: simple, explicit, and using the standard library.
 
 // Logger wraps slog.Logger for convenient access.
 var log *slog.Logger

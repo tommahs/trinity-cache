@@ -1,4 +1,4 @@
-// metrics provides utilities for tracking metrics for trinity-cache
+//Package metrics provides utilities for tracking metrics for trinity-cache
 package metrics
 
 import (

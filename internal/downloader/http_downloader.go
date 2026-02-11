@@ -26,7 +26,7 @@ type HTTPDownloader struct {
 	cache       Cache
 	httpClient  *http.Client
 	dedupesMu   sync.Mutex
-	dedupes     map[string]*deduplicationEntry // key: sha256(url+name+version)
+	// dedupes     map[string]*deduplicationEntry // key: sha256(url+name+version)
 	tempDir     string
 	retries     int
 	timeout     time.Duration
@@ -41,13 +41,13 @@ type Cache interface {
 }
 
 // deduplicationEntry represents a download in progress or completed
-type deduplicationEntry struct {
-	mu       sync.Mutex
-	path     string
-	err      error
-	complete bool
-	waiters  []chan struct{}
-}
+// type deduplicationEntry struct {
+// 	mu       sync.Mutex
+// 	path     string
+// 	err      error
+// 	complete bool
+// 	waiters  []chan struct{}
+// }
 
 // NewHTTPDownloader creates a new HTTP downloader.
 // maxRetries: number of retry attempts (minimum 1)
@@ -77,7 +77,7 @@ func NewHTTPDownloader(selector mirror.Selector, cache Cache, tempDir string, ma
 	return &HTTPDownloader{
 		selector:   selector,
 		cache:      cache,
-		dedupes:    make(map[string]*deduplicationEntry),
+		// dedupes:    make(map[string]*deduplicationEntry),
 		tempDir:    tempDir,
 		retries:    maxRetries,
 		timeout:    timeout,
@@ -247,7 +247,7 @@ func (hd *HTTPDownloader) Verify(filePath, expectedChecksum string) error {
 		return fmt.Errorf("failed to open file: %w", err)
 	}
 	defer func() {
-		if err := f.Close(); err == nil {
+		if closeErr := f.Close(); closeErr != nil {
 			err = fmt.Errorf("close temp file: %w", err)
 		}
 	}()

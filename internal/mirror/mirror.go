@@ -1,3 +1,4 @@
+//Package mirror provides the mirror, selector and weightedselector structs and provides utilities for them. 
 package mirror
 
 import (

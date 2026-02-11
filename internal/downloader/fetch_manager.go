@@ -66,6 +66,7 @@ func (fm *FetchManager) FetchIfNeeded(name, currentVersion string) (bool, error)
 		return false, fmt.Errorf("failed to select mirror: %w", err)
 	}
 
+	// TODO: 
 	// In a real implementation, we'd query the mirror for available versions
 	// For now, we'll update the last check time
 	fm.mu.Lock()

@@ -1,3 +1,4 @@
+// Package server implements the HTTPServer. It contains utilities to handle packages, interact with cache and handle stats and metrics.
 package server
 
 import (
@@ -173,6 +174,16 @@ func (s *HTTPServer) SetFetchManager(fm *downloader.FetchManager) {
 	}
 }
 
+// pacmanRequestInfo holds parsed pacman request information
+type pacmanRequestInfo struct {
+	repo       string
+	arch       string
+	filename   string
+	isRepoFile bool
+	pkgName    string
+	version    string
+}
+
 // handlePacmanRequest handles Arch Linux pacman package requests
 // Format: /{repo}/os/{arch}/{package-version}.pkg.tar.zst
 // Example: /core/os/x86_64/linux-6.7.1-1-x86_64.pkg.tar.zst
@@ -185,201 +196,302 @@ func (s *HTTPServer) handlePacmanRequest(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	// Extract the path after the host
-	path := r.URL.Path
-	if path == "/" {
+	// Parse and validate request
+	reqInfo, err := s.parsePacmanRequest(r.URL.Path)
+	if err != nil {
 		w.WriteHeader(http.StatusNotFound)
 		return
 	}
 
-	// Parse path parts
+	// Route to appropriate handler
+	if reqInfo.isRepoFile {
+		s.handlePacmanRepoFile(w, reqInfo)
+	} else {
+		s.handlePacmanPackageFile(w, reqInfo)
+	}
+}
+
+// parsePacmanRequest extracts and validates pacman request path components
+func (s *HTTPServer) parsePacmanRequest(path string) (*pacmanRequestInfo, error) {
+	if path == "/" {
+		return nil, fmt.Errorf("empty path")
+	}
+
 	parts := strings.Split(strings.Trim(path, "/"), "/")
 	if len(parts) < 1 {
-		w.WriteHeader(http.StatusNotFound)
-		return
+		return nil, fmt.Errorf("invalid path")
 	}
 
-	repo := parts[0]
-	filename := parts[len(parts)-1]
+	info := &pacmanRequestInfo{
+		repo:     parts[0],
+		filename: parts[len(parts)-1],
+	}
 
-	// If this is not a package file, attempt to serve repo-level files (e.g., core.db)
-	if !strings.HasSuffix(filename, ".pkg.tar.zst") {
-		// Expect repo file under /{repo}/os/{arch}/{filename}
-		if len(parts) >= 3 && parts[1] == "os" {
-			arch := parts[2]
-			if fc, ok := s.cacheManager.(*cache.FilesystemCache); ok {
-				repoFile := filepath.Join(fc.GetStoragePath(), repo, "os", arch, filename)
-				if _, err := os.Stat(repoFile); err == nil {
-					logger.Info("serving repo file", "repo", repo, "filename", filename)
-					metrics.RecordCacheHit()
-					if err := s.ServePackage(w, repoFile); err != nil {
-						logger.Error("failed to serve repo file", "path", repoFile, "error", err)
-					}
-					return
-				}
+	// Determine if this is a package file or repo file
+	info.isRepoFile = !strings.HasSuffix(info.filename, ".pkg.tar.zst")
 
-				// Not present in cache — try to fetch from upstream if available
-				if s.fetchManager != nil {
-					upstreamPath := fmt.Sprintf("%s/os/%s/%s", repo, arch, filename)
-					result, err := s.fetchManager.FetchVersion(repo, filename, upstreamPath)
-					if err == nil && result != nil {
-						if fc, ok := s.cacheManager.(*cache.FilesystemCache); ok {
-							// Let cache place the file in the correct repo layout
-							if _, err := fc.PutRepoFile(repo, arch, filename, result.Path); err != nil {
-								logger.Error("failed to store repo file in cache", "from", result.Path, "to", repoFile, "error", err)
-								w.WriteHeader(http.StatusInternalServerError)
-								fmt.Fprintf(w, "Failed to cache repo file: %s", err.Error())
-								return
-							}
-
-							logger.Info("repo file cached successfully", "repo", repo, "filename", filename, "size", result.Size)
-							metrics.RecordCacheHit()
-							if err := s.ServePackage(w, repoFile); err != nil {
-								logger.Error("failed to serve repo file from cache", "path", repoFile, "error", err)
-							}
-							return
-						}
-
-						// Fallback: server will move file
-						if err := s.moveFileToCache(result.Path, repoFile); err != nil {
-							logger.Error("failed to move repo file to cache", "from", result.Path, "to", repoFile, "error", err)
-							w.WriteHeader(http.StatusInternalServerError)
-							fmt.Fprintf(w, "Failed to cache repo file: %s", err.Error())
-							return
-						}
-
-						logger.Info("repo file cached successfully (fallback)", "repo", repo, "filename", filename, "size", result.Size)
-						metrics.RecordCacheHit()
-						if err := s.ServePackage(w, repoFile); err != nil {
-							logger.Error("failed to serve repo file from cache", "path", repoFile, "error", err)
-						}
-						return
-					}
-					if err != nil {
-						logger.Error("failed to fetch repo file", "repo", repo, "filename", filename, "error", err)
-						w.WriteHeader(http.StatusInternalServerError)
-						fmt.Fprintf(w, "Failed to fetch repo file: %s", err.Error())
-						return
-					}
-				}
-			}
+	if info.isRepoFile {
+		// Repo files: /{repo}/os/{arch}/{filename}
+		if len(parts) < 3 || parts[1] != "os" {
+			return nil, fmt.Errorf("invalid repo file path")
 		}
+		info.arch = parts[2]
+	} else {
+		// Package files: /{repo}/os/{arch}/{filename}.pkg.tar.zst
+		if len(parts) < 4 || parts[1] != "os" {
+			return nil, fmt.Errorf("invalid package path")
+		}
+		info.arch = parts[2]
 
-		// Not found or unsupported path
+		// Parse package name and version
+		pkgName, version, err := s.parsePackageName(info.filename, info.arch)
+		if err != nil {
+			return nil, fmt.Errorf("invalid package format: %w", err)
+		}
+		info.pkgName = pkgName
+		info.version = version
+	}
+
+	return info, nil
+}
+
+// handlePacmanRepoFile handles repository metadata files (e.g., core.db)
+func (s *HTTPServer) handlePacmanRepoFile(w http.ResponseWriter, info *pacmanRequestInfo) {
+	fc, ok := s.cacheManager.(*cache.FilesystemCache)
+	if !ok {
 		w.WriteHeader(http.StatusNotFound)
 		return
 	}
 
-	// Expect package path: /{repo}/os/{arch}/{filename}.pkg.tar.zst
-	if len(parts) < 4 || parts[1] != "os" {
-		// Not a pacman package request
+	repoFile := filepath.Join(fc.GetStoragePath(), info.repo, "os", info.arch, info.filename)
+
+	// Try to serve from cache
+	if s.tryServeRepoFileFromCache(w, repoFile, info.repo, info.filename) {
+		return
+	}
+
+	// Fetch from upstream if not in cache
+	s.fetchAndServeRepoFile(w, info, repoFile, fc)
+}
+
+// tryServeRepoFileFromCache attempts to serve a repo file from cache
+func (s *HTTPServer) tryServeRepoFileFromCache(w http.ResponseWriter, repoFile, repo, filename string) bool {
+	if _, err := os.Stat(repoFile); err == nil {
+		logger.Info("serving repo file", "repo", repo, "filename", filename)
+		metrics.RecordCacheHit()
+		if servererr := s.ServePackage(w, repoFile); servererr != nil {
+			logger.Error("failed to serve repo file", "path", repoFile, "error", servererr)
+		}
+		return true
+	}
+	return false
+}
+
+// fetchAndServeRepoFile fetches a repo file from upstream and serves it
+func (s *HTTPServer) fetchAndServeRepoFile(w http.ResponseWriter, info *pacmanRequestInfo, repoFile string, fc *cache.FilesystemCache) {
+	if s.fetchManager == nil {
 		w.WriteHeader(http.StatusNotFound)
 		return
 	}
 
-	arch := parts[2]
+	upstreamPath := fmt.Sprintf("%s/os/%s/%s", info.repo, info.arch, info.filename)
+	result, err := s.fetchManager.FetchVersion(info.repo, info.filename, upstreamPath)
 
-	logger.Info("pacman request", "repo", repo, "arch", arch, "filename", filename)
-
-	// Parse package name and version from filename
-	// Format: {package}-{version}-{arch}.pkg.tar.zst
-	pkgName, version, err := s.parsePackageName(filename, arch)
 	if err != nil {
-		logger.Warn("failed to parse package", "filename", filename, "error", err)
-		w.WriteHeader(http.StatusBadRequest)
-		fmt.Fprintf(w, "Invalid package format")
+		logger.Error("failed to fetch repo file", "repo", info.repo, "filename", info.filename, "error", err)
+		w.WriteHeader(http.StatusInternalServerError)
+		////nolint:errcheck
+		fmt.Fprintf(w, "Failed to fetch repo file: %s", err.Error())
 		return
 	}
 
-	// Check if package exists in cache (repo-aware path)
-	var localPath string
-			if fc, ok := s.cacheManager.(*cache.FilesystemCache); ok {
-				localPath = filepath.Join(fc.GetStoragePath(), repo, "os", arch, filename)
-				if _, err := os.Stat(localPath); err == nil {
-					logger.Debug("serving from cache", "package", pkgName, "version", version)
-					metrics.RecordCacheHit()
-					if err := s.ServePackage(w, localPath); err != nil {
-						logger.Error("failed to serve cached package", "path", localPath, "error", err)
-					}
-					return
-				}
-			} else {
-		// Fallback to cache manager interface if not a FilesystemCache
-		cacheExists, _ := s.cacheManager.Has(pkgName, version)
-		if cacheExists {
-			logger.Debug("serving from cache (fallback)", "package", pkgName, "version", version)
-			metrics.RecordCacheHit()
-			localPath = s.getPackagePath(repo, arch, filename)
-			if err := s.ServePackage(w, localPath); err != nil {
-				logger.Error("failed to serve cached package", "path", localPath, "error", err)
-			}
+	if result == nil {
+		w.WriteHeader(http.StatusNotFound)
+		return
+	}
+
+	// Cache the fetched file
+	if err := s.cacheRepoFile(result.Path, repoFile, info, fc); err != nil {
+		logger.Error("failed to cache repo file", "error", err)
+		w.WriteHeader(http.StatusInternalServerError)
+		if _, err := fmt.Fprintf(w, "Failed to cache repo file: %s", err.Error()); err != nil {
+			logger.Error("failed to cache repo file ", "error", err)
+		}
+		
+		return
+	}
+
+	logger.Info("repo file cached successfully", "repo", info.repo, "filename", info.filename, "size", result.Size)
+	metrics.RecordCacheHit()
+
+	if err := s.ServePackage(w, repoFile); err != nil {
+		logger.Error("failed to serve repo file from cache", "path", repoFile, "error", err)
+	}
+}
+
+// cacheRepoFile stores a repo file in the cache
+func (s *HTTPServer) cacheRepoFile(sourcePath, destPath string, info *pacmanRequestInfo, fc *cache.FilesystemCache) error {
+	if fc != nil {
+		_, err := fc.PutRepoFile(info.repo, info.arch, info.filename, sourcePath)
+		return err
+	}
+	return s.moveFileToCache(sourcePath, destPath)
+}
+
+// handlePacmanPackageFile handles package file requests
+func (s *HTTPServer) handlePacmanPackageFile(w http.ResponseWriter, info *pacmanRequestInfo) {
+	logger.Info("pacman request", "repo", info.repo, "arch", info.arch, "filename", info.filename)
+
+	fc, ok := s.cacheManager.(*cache.FilesystemCache)
+	if ok {
+		localPath := filepath.Join(fc.GetStoragePath(), info.repo, "os", info.arch, info.filename)
+		if s.tryServePackageFromCache(w, localPath, info.pkgName, info.version) {
 			return
 		}
+		s.fetchAndServePackage(w, info, localPath, fc)
+	} else {
+		s.handlePackageFallbackCache(w, info)
 	}
+}
 
-	// Cache miss - try to download from upstream mirror
-	logger.Info("cache miss, fetching from upstream", "package", pkgName, "version", version)
+// tryServePackageFromCache attempts to serve a package from cache
+func (s *HTTPServer) tryServePackageFromCache(w http.ResponseWriter, localPath, pkgName, version string) bool {
+	if _, err := os.Stat(localPath); err == nil {
+		logger.Debug("serving from cache", "package", pkgName, "version", version)
+		metrics.RecordCacheHit()
+		if err := s.ServePackage(w, localPath); err != nil {
+			logger.Error("failed to serve cached package", "path", localPath, "error", err)
+		}
+		return true
+	}
+	return false
+}
+
+// fetchAndServePackage fetches a package from upstream and serves it
+func (s *HTTPServer) fetchAndServePackage(w http.ResponseWriter, info *pacmanRequestInfo, localPath string, fc *cache.FilesystemCache) {
+	logger.Info("cache miss, fetching from upstream", "package", info.pkgName, "version", info.version)
 	metrics.RecordCacheMiss()
 
-	// Construct paths
-	upstreamPath := fmt.Sprintf("%s/os/%s/%s", repo, arch, filename) // For upstream mirror
-	if localPath == "" {
-		localPath = s.getPackagePath(repo, arch, filename) // For local cache
+	if s.fetchManager == nil {
+		s.respondFetchUnavailable(w, info.pkgName, info.version)
+		return
 	}
 
-	// Try to fetch the package
-	if s.fetchManager != nil {
-		result, err := s.fetchManager.FetchVersion(pkgName, version, upstreamPath)
-		if err == nil && result != nil {
-			if fc, ok := s.cacheManager.(*cache.FilesystemCache); ok {
-				// Let cache place the file in the correct repo layout
-				if _, err := fc.PutPackageFile(repo, arch, filename, result.Path); err != nil {
-					logger.Error("failed to store package in cache", "from", result.Path, "to", localPath, "error", err)
-					w.WriteHeader(http.StatusInternalServerError)
-					fmt.Fprintf(w, "Failed to cache package: %s", err.Error())
-					return
-				}
+	upstreamPath := fmt.Sprintf("%s/os/%s/%s", info.repo, info.arch, info.filename)
+	result, err := s.fetchManager.FetchVersion(info.pkgName, info.version, upstreamPath)
 
-				logger.Info("package cached successfully", "package", pkgName, "version", version, "size", result.Size)
-				metrics.RecordCacheHit() // Record as hit after successful fetch and cache
-
-				// Serve from cache now
-				if err := s.ServePackage(w, localPath); err != nil {
-					logger.Error("failed to serve package from cache", "path", localPath, "error", err)
-				}
-				return
-			}
-
-			// Fallback: move using server helper
-			if err := s.moveFileToCache(result.Path, localPath); err != nil {
-				logger.Error("failed to move file to cache", "from", result.Path, "to", localPath, "error", err)
-				w.WriteHeader(http.StatusInternalServerError)
-				fmt.Fprintf(w, "Failed to cache package: %s", err.Error())
-				return
-			}
-
-			logger.Info("package cached successfully (fallback)", "package", pkgName, "version", version, "size", result.Size)
-			metrics.RecordCacheHit() // Record as hit after successful fetch and cache
-
-			// Serve from cache now
-			if err := s.ServePackage(w, localPath); err != nil {
-				logger.Error("failed to serve package from cache", "path", localPath, "error", err)
-			}
-			return
+	if err != nil {
+		logger.Error("failed to fetch package", "package", info.pkgName, "version", info.version, "error", err)
+		w.WriteHeader(http.StatusInternalServerError)
+		if _, writeErr := fmt.Fprintf(w, "Failed to fetch package: %s", err.Error()); writeErr != nil {
+			logger.Warn("failed to write HTTP error response", "error", writeErr)
 		}
-
-		if err != nil {
-			logger.Error("failed to fetch package", "package", pkgName, "version", version, "error", err)
-			w.WriteHeader(http.StatusInternalServerError)
-			fmt.Fprintf(w, "Failed to fetch package: %s", err.Error())
-			return
-		}
+		return
 	}
 
-	// No fetch manager available
+	if result == nil {
+		w.WriteHeader(http.StatusNotFound)
+		return
+	}
+
+	// Cache the fetched package
+	if err := s.cachePackageFile(result.Path, localPath, info, fc); err != nil {
+		logger.Error("failed to cache package", "error", err)
+		w.WriteHeader(http.StatusInternalServerError)
+		if _, writeErr := fmt.Fprintf(w, "Failed to cache package: %s", err.Error()); writeErr != nil {
+			logger.Warn("failed to write HTTP error response", "error", writeErr)
+		}
+		return
+	}
+
+	logger.Info("package cached successfully", "package", info.pkgName, "version", info.version, "size", result.Size)
+	metrics.RecordCacheHit()
+
+	if err := s.ServePackage(w, localPath); err != nil {
+		logger.Error("failed to serve package from cache", "path", localPath, "error", err)
+	}
+}
+
+// cachePackageFile stores a package file in the cache
+func (s *HTTPServer) cachePackageFile(sourcePath, destPath string, info *pacmanRequestInfo, fc *cache.FilesystemCache) error {
+	if fc != nil {
+		_, err := fc.PutPackageFile(info.repo, info.arch, info.filename, sourcePath)
+		return err
+	}
+	return s.moveFileToCache(sourcePath, destPath)
+}
+
+// handlePackageFallbackCache handles package requests when FilesystemCache is not available
+func (s *HTTPServer) handlePackageFallbackCache(w http.ResponseWriter, info *pacmanRequestInfo) {
+	cacheExists, _ := s.cacheManager.Has(info.pkgName, info.version)
+	if cacheExists {
+		logger.Debug("serving from cache (fallback)", "package", info.pkgName, "version", info.version)
+		metrics.RecordCacheHit()
+		localPath := s.getPackagePath(info.repo, info.arch, info.filename)
+		if err := s.ServePackage(w, localPath); err != nil {
+			logger.Error("failed to serve cached package", "path", localPath, "error", err)
+		}
+		return
+	}
+
+	s.fetchPackageFallback(w, info)
+}
+
+// fetchPackageFallback fetches and serves a package using fallback cache
+func (s *HTTPServer) fetchPackageFallback(w http.ResponseWriter, info *pacmanRequestInfo) {
+	logger.Info("cache miss, fetching from upstream", "package", info.pkgName, "version", info.version)
+	metrics.RecordCacheMiss()
+
+	if s.fetchManager == nil {
+		s.respondFetchUnavailable(w, info.pkgName, info.version)
+		return
+	}
+
+	localPath := s.getPackagePath(info.repo, info.arch, info.filename)
+	upstreamPath := fmt.Sprintf("%s/os/%s/%s", info.repo, info.arch, info.filename)
+
+	result, err := s.fetchManager.FetchVersion(info.pkgName, info.version, upstreamPath)
+	if err != nil {
+		logger.Error("failed to fetch package", "package", info.pkgName, "version", info.version, "error", err)
+		w.WriteHeader(http.StatusInternalServerError)
+			// Check error from writing the response
+		if _, writeErr := fmt.Fprintf(w, "Failed to fetch package: %s", err.Error()); writeErr != nil {
+			logger.Warn("failed to write HTTP error response", "error", writeErr)
+		}
+		return
+	}
+
+	if result == nil {
+		w.WriteHeader(http.StatusNotFound)
+		return
+	}
+
+	if err := s.moveFileToCache(result.Path, localPath); err != nil {
+		logger.Error("failed to move file to cache", "error", err)
+		w.WriteHeader(http.StatusInternalServerError)
+		
+		if _, writeErr := fmt.Fprintf(w, "Failed to cache package: %s", err.Error()); writeErr != nil {
+			logger.Warn("failed to write HTTP error response", "error", writeErr)
+		}
+		return
+	}
+
+	logger.Info("package cached successfully (fallback)", "package", info.pkgName, "version", info.version, "size", result.Size)
+	metrics.RecordCacheHit()
+
+	if err := s.ServePackage(w, localPath); err != nil {
+		logger.Error("failed to serve package from cache", "path", localPath, "error", err)
+	}
+}
+
+// respondFetchUnavailable sends a 503 response when fetch manager is unavailable
+func (s *HTTPServer) respondFetchUnavailable(w http.ResponseWriter, pkgName, version string) {
 	logger.Warn("fetch manager not available, cannot fetch missing package", "package", pkgName, "version", version)
 	w.WriteHeader(http.StatusServiceUnavailable)
-	fmt.Fprintf(w, "Package not in cache and fetch unavailable")
+	
+	if _, writeErr := fmt.Fprintf(w, "Package not in cache and fetch unavailable"); writeErr != nil {
+		logger.Warn("failed to write HTTP error response", "error", writeErr)
+	}
 }
 
 // parsePackageName extracts package name and version from filename
@@ -465,13 +577,22 @@ func copyFile(src, dst string) error {
 	if err != nil {
 		return err
 	}
-	defer source.Close()
+		// Ensure file is closed properly
+	defer func() {
+		if closeErr := source.Close(); closeErr != nil {
+			err = fmt.Errorf("close temp file: %w", closeErr)
+		}
+	}()
 
 	dest, err := os.Create(dst)
 	if err != nil {
 		return err
 	}
-	defer dest.Close()
+	defer func() {
+		if closeErr := dest.Close(); closeErr == nil {
+			err = fmt.Errorf("close temp file: %w", closeErr)
+		}
+	}()
 
 	_, err = io.Copy(dest, source)
 	return err
@@ -491,7 +612,9 @@ func (s *HTTPServer) handlePackageRequest(w http.ResponseWriter, r *http.Request
 	path := r.URL.Path[len("/api/v1/packages/"):]
 	if path == "" {
 		w.WriteHeader(http.StatusBadRequest)
-		fmt.Fprintf(w, `{"error":"package path required"}`)
+		if _, writeErr := fmt.Fprintf(w, `{"error":"package path required"}`); writeErr != nil {
+			logger.Warn("failed to write HTTP error response", "error", writeErr)
+		}
 		return
 	}
 
@@ -512,7 +635,9 @@ func (s *HTTPServer) handleFetchRequest(w http.ResponseWriter, r *http.Request) 
 	if s.fetchManager == nil {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusServiceUnavailable)
-		fmt.Fprintf(w, `{"error":"fetch manager not available"}`)
+		if _, writeErr := fmt.Fprintf(w, `{"error":"fetch manager not available"}`); writeErr != nil {
+			logger.Warn("failed to write HTTP error response", "error", writeErr)
+		}		
 		return
 	}
 
@@ -526,7 +651,9 @@ func (s *HTTPServer) handleFetchRequest(w http.ResponseWriter, r *http.Request) 
 	if path == "" {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusBadRequest)
-		fmt.Fprintf(w, `{"error":"package name and version required"}`)
+		if _, writeErr := fmt.Fprintf(w, `{"error":"package name and version required"}`); writeErr != nil {
+			logger.Warn("failed to write HTTP error response", "error", writeErr)
+		}
 		return
 	}
 
@@ -534,7 +661,10 @@ func (s *HTTPServer) handleFetchRequest(w http.ResponseWriter, r *http.Request) 
 	if len(parts) < 2 {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusBadRequest)
-		fmt.Fprintf(w, `{"error":"invalid package path"}`)
+		if _, writeErr := fmt.Fprintf(w, `{"error":"invalid package path"}`); writeErr != nil {
+			logger.Warn("failed to write HTTP error response", "error", writeErr)
+		}		
+		
 		return
 	}
 
@@ -544,7 +674,10 @@ func (s *HTTPServer) handleFetchRequest(w http.ResponseWriter, r *http.Request) 
 	if name == "" || version == "" {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusBadRequest)
-		fmt.Fprintf(w, `{"error":"name and version required"}`)
+		if _, writeErr := fmt.Fprintf(w, `{"error":"name and version required"}`); writeErr != nil {
+			logger.Warn("failed to write HTTP error response", "error", writeErr)
+		}		
+		
 		return
 	}
 
@@ -559,7 +692,10 @@ func (s *HTTPServer) handleFetchRequest(w http.ResponseWriter, r *http.Request) 
 		logger.Error("on-demand fetch failed", "name", name, "version", version, "error", err)
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusInternalServerError)
-		fmt.Fprintf(w, `{"error":"fetch failed: %s"}`, err.Error())
+		if _, writeErr := fmt.Fprintf(w, `{"error":"fetch failed: %s"}`, err.Error()); writeErr != nil {
+			logger.Warn("failed to write HTTP error response", "error", writeErr)
+		}	
+		
 		return
 	}
 
@@ -613,7 +749,10 @@ func (s *HTTPServer) handleStatsRequest(w http.ResponseWriter, r *http.Request) 
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(stats)
+	if err := json.NewEncoder(w).Encode(stats); err != nil {
+	logger.Warn("failed to encode HTTP response", "error", err)
+}
+
 }
 
 // handleHealth returns server health status
@@ -633,7 +772,9 @@ func (s *HTTPServer) handleHealth(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(health)
+	if err := json.NewEncoder(w).Encode(health); err != nil {
+	logger.Warn("failed to encode HTTP response", "error", err)
+}
 }
 
 // handleMetrics returns metrics in Prometheus or JSON format
@@ -665,6 +806,9 @@ func (s *HTTPServer) handleMetrics(w http.ResponseWriter, r *http.Request) {
 		metricsData := metrics.GetMetricsJSON()
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(metricsData)
+		if err := json.NewEncoder(w).Encode(metricsData); err != nil {
+			logger.Warn("failed to encode HTTP response", "error", err)
+		}
 		return
 	}
 
@@ -674,7 +818,10 @@ func (s *HTTPServer) handleMetrics(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
 	w.WriteHeader(http.StatusOK)
-	fmt.Sprint(w, prometheusData)
+	if _, writeErr := fmt.Fprint(w, prometheusData); writeErr != nil {
+		logger.Warn("failed to write HTTP prometheusData response", "error", writeErr)
+	}
+	
 }
 
 // handleMetricsSummary serves a human-readable metrics summary
@@ -688,7 +835,9 @@ func (s *HTTPServer) handleMetricsSummary(w http.ResponseWriter, r *http.Request
 
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	w.WriteHeader(http.StatusOK)
-	fmt.Fprint(w, metricsData)
+	if _, writeErr := fmt.Fprint(w, metricsData); writeErr != nil {
+		logger.Warn("failed to write HTTP metricsData response", "error", writeErr)
+	}
 }
 
 // ServePackage serves a package file directly
@@ -705,8 +854,8 @@ func (s *HTTPServer) ServePackage(w http.ResponseWriter, pkgPath string) error {
 	}
 	// Ensure file is closed properly
 	defer func() {
-		if err := file.Close(); err == nil {
-			err = fmt.Errorf("close temp file: %w", err)
+		if closeErr := file.Close(); closeErr == nil {
+			err = fmt.Errorf("close temp file: %w", closeErr)
 		}
 	}()
 

@@ -1,3 +1,4 @@
+//Package config provides the core config logic for reading yaml configuration.
 package config
 
 import (
