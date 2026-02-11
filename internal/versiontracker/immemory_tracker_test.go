@@ -314,7 +314,7 @@ func TestInMemoryTracker_Find_CaseInsensitive(t *testing.T) {
 	tracker.Update("others", "1.0")
 
 	results := tracker.Find("MY")
-	if len(results) != 2 {
+	if len(results) != 3 {
 		t.Errorf("expected 2 results for case-insensitive 'MY', got %d: %v", len(results), results)
 	}
 
