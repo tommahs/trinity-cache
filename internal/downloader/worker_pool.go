@@ -33,10 +33,10 @@ type WorkerPool struct {
 
 // PoolMetrics tracks pool statistics
 type PoolMetrics struct {
-	TotalDownloads    int64
+	TotalDownloads      int64
 	SuccessfulDownloads int64
-	FailedDownloads   int64
-	mu                sync.Mutex
+	FailedDownloads     int64
+	mu                  sync.Mutex
 }
 
 // NewWorkerPool creates a new download worker pool with the specified number of workers.

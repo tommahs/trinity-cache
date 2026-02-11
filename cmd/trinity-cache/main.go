@@ -1,4 +1,4 @@
-//Package main implements Trinity-cache.
+// Package main implements Trinity-cache.
 package main
 
 import (
@@ -23,16 +23,16 @@ import (
 
 // Application holds all application components
 type Application struct {
-	cache          cache.CacheManager
-	selector       mirror.Selector
-	downloader     downloader.Downloader
-	workerPool     *downloader.WorkerPool
-	fetchManager   *downloader.FetchManager
-	httpServer     server.Server
-	retention      *cache.RetentionManager
-	shutdown       chan os.Signal
-	shutdownDone   chan struct{}
-	mu             sync.Mutex
+	cache        cache.CacheManager
+	selector     mirror.Selector
+	downloader   downloader.Downloader
+	workerPool   *downloader.WorkerPool
+	fetchManager *downloader.FetchManager
+	httpServer   server.Server
+	retention    *cache.RetentionManager
+	shutdown     chan os.Signal
+	shutdownDone chan struct{}
+	mu           sync.Mutex
 }
 
 func main() {
@@ -272,7 +272,7 @@ func (app *Application) Shutdown() error {
 
 	// Stop worker pool
 	logger.Debug("stopping download worker pool")
-	
+
 	if err := app.workerPool.Stop(); err != nil {
 		logger.Error("application error", "error", err)
 		os.Exit(1)
@@ -310,4 +310,3 @@ func (app *Application) Shutdown() error {
 func (app *Application) WaitForShutdown() {
 	<-app.shutdownDone
 }
-

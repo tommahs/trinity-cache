@@ -1,4 +1,4 @@
-//Package mirror provides the mirror, selector and weightedselector structs and provides utilities for them. 
+// Package mirror provides the mirror, selector and weightedselector structs and provides utilities for them.
 package mirror
 
 import (
@@ -70,9 +70,9 @@ type WeightedSelector struct {
 	mirrors         []*Mirror
 	mu              sync.RWMutex
 	timeNow         func() time.Time // injected for testing time-dependent behavior
-	stopChan        chan struct{}     // signal to stop recovery goroutine
+	stopChan        chan struct{}    // signal to stop recovery goroutine
 	recoveryTicker  *time.Ticker     // ticker for periodic recovery
-	recoveryRunning bool              // whether recovery goroutine is active
+	recoveryRunning bool             // whether recovery goroutine is active
 }
 
 // NewWeightedSelector creates a new weighted selector.
@@ -130,7 +130,7 @@ func (ws *WeightedSelector) Select() (*Mirror, error) {
 	}
 
 	logger.Debug("mirror selected", "url", selected.URL, "effective_weight", selected.EffectiveWeight, "score", maxScore)
-		metrics.RecordMirrorSelection()
+	metrics.RecordMirrorSelection()
 	return selected, nil
 }
 
@@ -140,7 +140,8 @@ func (ws *WeightedSelector) Select() (*Mirror, error) {
 // - In-flight downloads (tertiary: fewer in-flight downloads = higher score)
 //
 // The formula is:
-//   score = EffectiveWeight * (1 + timeSinceLastUseBoost) / (1 + inFlightPenalty)
+//
+//	score = EffectiveWeight * (1 + timeSinceLastUseBoost) / (1 + inFlightPenalty)
 //
 // This ensures:
 // 1. Mirrors with negative or zero effective weight have zero score
@@ -246,7 +247,7 @@ func (ws *WeightedSelector) recoverWeights(recoveryRate float64) {
 						m.EffectiveWeight = m.BaseWeight
 					}
 					logger.Debug("mirror weight recovered", "url", m.URL, "old_weight", oldWeight, "new_weight", m.EffectiveWeight)
-									metrics.RecordMirrorRecovery()
+					metrics.RecordMirrorRecovery()
 				}
 			}
 			ws.mu.Unlock()

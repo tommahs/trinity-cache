@@ -1,4 +1,4 @@
-//Package config provides the core config logic for reading yaml configuration.
+// Package config provides the core config logic for reading yaml configuration.
 package config
 
 import (
@@ -17,40 +17,40 @@ type MirrorConfig struct {
 
 // ServerConfig contains HTTP server settings.
 type ServerConfig struct {
-	Port         string `yaml:"port" validate:"required"`           // e.g., ":8080"
-	ReadTimeout  int    `yaml:"read_timeout" validate:"min=1"`      // seconds
-	WriteTimeout int    `yaml:"write_timeout" validate:"min=1"`     // seconds
+	Port         string `yaml:"port" validate:"required"`       // e.g., ":8080"
+	ReadTimeout  int    `yaml:"read_timeout" validate:"min=1"`  // seconds
+	WriteTimeout int    `yaml:"write_timeout" validate:"min=1"` // seconds
 }
 
 // RetentionConfig contains cache retention settings.
 type RetentionConfig struct {
-	KeepVersions        int     `yaml:"keep_versions" validate:"min=1"`       // minimum 1
+	KeepVersions        int     `yaml:"keep_versions" validate:"min=1"`          // minimum 1
 	EnforcementInterval float64 `yaml:"enforcement_interval" validate:"min=0.1"` // hours
 }
 
 // MirrorRecoveryConfig contains mirror weight recovery settings.
 type MirrorRecoveryConfig struct {
-	Interval int     `yaml:"interval" validate:"min=1"`       // minutes
+	Interval int     `yaml:"interval" validate:"min=1"`        // minutes
 	Rate     float64 `yaml:"rate" validate:"min=0.01,max=1.0"` // 0.0-1.0
 }
 
 // DownloadConfig contains download settings.
 type DownloadConfig struct {
-	MaxRetries int    `yaml:"max_retries" validate:"min=1"`  // minimum 1 retry
-	Timeout    int    `yaml:"timeout" validate:"min=1"`      // seconds
-	TempDir    string `yaml:"temp_dir"`                       // empty = system temp
+	MaxRetries int    `yaml:"max_retries" validate:"min=1"` // minimum 1 retry
+	Timeout    int    `yaml:"timeout" validate:"min=1"`     // seconds
+	TempDir    string `yaml:"temp_dir"`                     // empty = system temp
 }
 
 // Config is the top-level configuration for Trinity-cache.
 type Config struct {
-	Concurrency    int                    `yaml:"concurrency" validate:"min=1,max=10000"`
-	StoragePath    string                 `yaml:"storage_path" validate:"required,dirpath"`
-	LogLevel       string                 `yaml:"log_level" validate:"omitempty,oneof=debug info warn error"`
-	Mirrors        []MirrorConfig         `yaml:"mirrors" validate:"required,min=1,dive"`
-	Server         ServerConfig           `yaml:"server"`
-	Retention      RetentionConfig        `yaml:"retention"`
-	MirrorRecovery MirrorRecoveryConfig   `yaml:"mirror_recovery"`
-	Downloads      DownloadConfig         `yaml:"downloads"`
+	Concurrency    int                  `yaml:"concurrency" validate:"min=1,max=10000"`
+	StoragePath    string               `yaml:"storage_path" validate:"required,dirpath"`
+	LogLevel       string               `yaml:"log_level" validate:"omitempty,oneof=debug info warn error"`
+	Mirrors        []MirrorConfig       `yaml:"mirrors" validate:"required,min=1,dive"`
+	Server         ServerConfig         `yaml:"server"`
+	Retention      RetentionConfig      `yaml:"retention"`
+	MirrorRecovery MirrorRecoveryConfig `yaml:"mirror_recovery"`
+	Downloads      DownloadConfig       `yaml:"downloads"`
 }
 
 // Validate checks if the configuration is valid.
@@ -147,7 +147,7 @@ func Default() *Config {
 			EnforcementInterval: 1.0, // 1 hour
 		},
 		MirrorRecovery: MirrorRecoveryConfig{
-			Interval: 5,   // 5 minutes
+			Interval: 5,    // 5 minutes
 			Rate:     0.05, // 5% recovery per interval
 		},
 		Downloads: DownloadConfig{

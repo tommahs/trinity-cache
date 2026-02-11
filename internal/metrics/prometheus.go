@@ -185,10 +185,10 @@ func GetMetricsJSON() map[string]interface{} {
 	return map[string]interface{}{
 		"timestamp": time.Now(),
 		"downloads": map[string]interface{}{
-			"total":       m.TotalDownloads,
-			"successful":  m.SuccessfulDownloads,
-			"failed":      m.FailedDownloads,
-			"bytes_total": m.TotalBytesDownloaded,
+			"total":                m.TotalDownloads,
+			"successful":           m.SuccessfulDownloads,
+			"failed":               m.FailedDownloads,
+			"bytes_total":          m.TotalBytesDownloaded,
 			"avg_duration_seconds": m.AverageDownloadTime.Seconds(),
 		},
 		"cache": map[string]interface{}{

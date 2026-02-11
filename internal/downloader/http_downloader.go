@@ -22,14 +22,14 @@ import (
 // - Size verification
 // - Download deduplication
 type HTTPDownloader struct {
-	selector    mirror.Selector
-	cache       Cache
-	httpClient  *http.Client
-	dedupesMu   sync.Mutex
+	selector   mirror.Selector
+	cache      Cache
+	httpClient *http.Client
+	dedupesMu  sync.Mutex
 	// dedupes     map[string]*deduplicationEntry // key: sha256(url+name+version)
-	tempDir     string
-	retries     int
-	timeout     time.Duration
+	tempDir string
+	retries int
+	timeout time.Duration
 }
 
 // Cache interface for storing downloaded packages
@@ -75,8 +75,8 @@ func NewHTTPDownloader(selector mirror.Selector, cache Cache, tempDir string, ma
 	timeout := time.Duration(timeoutSeconds) * time.Second
 
 	return &HTTPDownloader{
-		selector:   selector,
-		cache:      cache,
+		selector: selector,
+		cache:    cache,
 		// dedupes:    make(map[string]*deduplicationEntry),
 		tempDir:    tempDir,
 		retries:    maxRetries,
@@ -113,8 +113,8 @@ func (hd *HTTPDownloader) Download(m *mirror.Mirror, pkgPath string) (*Result, e
 			// Mark mirror as penalized after use
 			hd.selector.Penalize(currentMirror, 0.5)
 			logger.Info("package downloaded successfully", "url", currentMirror.URL, "path", pkgPath)
-						// Record successful download with byte size
-						timer.RecordSuccess(result.Size)
+			// Record successful download with byte size
+			timer.RecordSuccess(result.Size)
 			return result, nil
 		}
 
@@ -223,7 +223,6 @@ func (hd *HTTPDownloader) downloadFromMirror(
 		Checksum: checksum,
 	}, nil
 }
-
 
 // SetRetries sets the number of retry attempts.
 func (hd *HTTPDownloader) SetRetries(count int) {

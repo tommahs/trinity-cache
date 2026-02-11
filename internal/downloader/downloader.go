@@ -1,4 +1,4 @@
-//Package downloader implements the interface for downloading packages. 
+// Package downloader implements the interface for downloading packages.
 package downloader
 
 import "github.com/tommahs/trinity-cache/internal/mirror"

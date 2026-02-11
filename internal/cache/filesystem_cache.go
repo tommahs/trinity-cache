@@ -14,10 +14,11 @@ import (
 
 // FilesystemCache implements CacheManager using the local filesystem.
 // The cache layout is:
-//   storage_path/
-//     package_name/
-//       package_name-version.pkg (actual package file)
-//       metadata.json (version metadata)
+//
+//	storage_path/
+//	  package_name/
+//	    package_name-version.pkg (actual package file)
+//	    metadata.json (version metadata)
 type FilesystemCache struct {
 	storagePath string
 }
@@ -304,7 +305,9 @@ func (fc *FilesystemCache) Cleanup() error {
 }
 
 // PutRepoFile moves or copies a repo-level file (e.g., core.db) into the repo layout:
-//   storage_path/<repo>/os/<arch>/<filename>
+//
+//	storage_path/<repo>/os/<arch>/<filename>
+//
 // Returns the final path of the stored file.
 func (fc *FilesystemCache) PutRepoFile(repo, arch, filename, srcPath string) (string, error) {
 	if repo == "" || filename == "" {

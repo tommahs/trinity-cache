@@ -1,4 +1,4 @@
-//Package cache implements the CacheManager interface and provides utilities to interact with the CacheManager
+// Package cache implements the CacheManager interface and provides utilities to interact with the CacheManager
 package cache
 
 // PackageVersion is a small descriptor for a stored package version.
@@ -11,6 +11,7 @@ type PackageVersion struct {
 // CacheManager manages a local package cache and enforces retention rules.
 // Implementations should log errors when operations fail. Info logging for
 // significant operations (like enforcing retention) is optional.
+//
 //nolint:revive
 type CacheManager interface {
 	// Has returns true if the given package name/version exists in cache.

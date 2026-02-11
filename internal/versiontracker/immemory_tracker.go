@@ -10,6 +10,7 @@ import (
 	"github.com/tommahs/trinity-cache/internal/cache"
 	"github.com/tommahs/trinity-cache/internal/logger"
 )
+
 // InMemoryTracker tracks package versions in memory, backed by a cache manager.
 // It provides efficient lookups and updates for package version information.
 type InMemoryTracker struct {

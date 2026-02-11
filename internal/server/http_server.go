@@ -114,7 +114,7 @@ func (s *HTTPServer) Shutdown(ctx context.Context) error {
 	close(s.shutdownChan)
 
 	// Wait for graceful shutdown with timeout
-	// 
+	//
 	if ctx == nil {
 		//nolint:contextcheck // allow default background context when ctx is nil
 		ctx = context.Background()
@@ -134,7 +134,7 @@ func (s *HTTPServer) Shutdown(ctx context.Context) error {
 		return err
 	case <-ctx.Done():
 		logger.Warn("HTTP server shutdown timeout, forcing close")
-		if err := s.httpServer.Close(); err !=nil {
+		if err := s.httpServer.Close(); err != nil {
 			logger.Error("error closing http server", "error", err)
 		}
 		s.mu.Lock()
@@ -317,7 +317,7 @@ func (s *HTTPServer) fetchAndServeRepoFile(w http.ResponseWriter, info *pacmanRe
 		if _, err := fmt.Fprintf(w, "Failed to cache repo file: %s", err.Error()); err != nil {
 			logger.Error("failed to cache repo file ", "error", err)
 		}
-		
+
 		return
 	}
 
@@ -454,7 +454,7 @@ func (s *HTTPServer) fetchPackageFallback(w http.ResponseWriter, info *pacmanReq
 	if err != nil {
 		logger.Error("failed to fetch package", "package", info.pkgName, "version", info.version, "error", err)
 		w.WriteHeader(http.StatusInternalServerError)
-			// Check error from writing the response
+		// Check error from writing the response
 		if _, writeErr := fmt.Fprintf(w, "Failed to fetch package: %s", err.Error()); writeErr != nil {
 			logger.Warn("failed to write HTTP error response", "error", writeErr)
 		}
@@ -469,7 +469,7 @@ func (s *HTTPServer) fetchPackageFallback(w http.ResponseWriter, info *pacmanReq
 	if err := s.moveFileToCache(result.Path, localPath); err != nil {
 		logger.Error("failed to move file to cache", "error", err)
 		w.WriteHeader(http.StatusInternalServerError)
-		
+
 		if _, writeErr := fmt.Fprintf(w, "Failed to cache package: %s", err.Error()); writeErr != nil {
 			logger.Warn("failed to write HTTP error response", "error", writeErr)
 		}
@@ -488,7 +488,7 @@ func (s *HTTPServer) fetchPackageFallback(w http.ResponseWriter, info *pacmanReq
 func (s *HTTPServer) respondFetchUnavailable(w http.ResponseWriter, pkgName, version string) {
 	logger.Warn("fetch manager not available, cannot fetch missing package", "package", pkgName, "version", version)
 	w.WriteHeader(http.StatusServiceUnavailable)
-	
+
 	if _, writeErr := fmt.Fprintf(w, "Package not in cache and fetch unavailable"); writeErr != nil {
 		logger.Warn("failed to write HTTP error response", "error", writeErr)
 	}
@@ -577,7 +577,7 @@ func copyFile(src, dst string) error {
 	if err != nil {
 		return err
 	}
-		// Ensure file is closed properly
+	// Ensure file is closed properly
 	defer func() {
 		if closeErr := source.Close(); closeErr != nil {
 			err = fmt.Errorf("close temp file: %w", closeErr)
@@ -637,7 +637,7 @@ func (s *HTTPServer) handleFetchRequest(w http.ResponseWriter, r *http.Request) 
 		w.WriteHeader(http.StatusServiceUnavailable)
 		if _, writeErr := fmt.Fprintf(w, `{"error":"fetch manager not available"}`); writeErr != nil {
 			logger.Warn("failed to write HTTP error response", "error", writeErr)
-		}		
+		}
 		return
 	}
 
@@ -663,8 +663,8 @@ func (s *HTTPServer) handleFetchRequest(w http.ResponseWriter, r *http.Request) 
 		w.WriteHeader(http.StatusBadRequest)
 		if _, writeErr := fmt.Fprintf(w, `{"error":"invalid package path"}`); writeErr != nil {
 			logger.Warn("failed to write HTTP error response", "error", writeErr)
-		}		
-		
+		}
+
 		return
 	}
 
@@ -676,8 +676,8 @@ func (s *HTTPServer) handleFetchRequest(w http.ResponseWriter, r *http.Request) 
 		w.WriteHeader(http.StatusBadRequest)
 		if _, writeErr := fmt.Fprintf(w, `{"error":"name and version required"}`); writeErr != nil {
 			logger.Warn("failed to write HTTP error response", "error", writeErr)
-		}		
-		
+		}
+
 		return
 	}
 
@@ -694,8 +694,8 @@ func (s *HTTPServer) handleFetchRequest(w http.ResponseWriter, r *http.Request) 
 		w.WriteHeader(http.StatusInternalServerError)
 		if _, writeErr := fmt.Fprintf(w, `{"error":"fetch failed: %s"}`, err.Error()); writeErr != nil {
 			logger.Warn("failed to write HTTP error response", "error", writeErr)
-		}	
-		
+		}
+
 		return
 	}
 
@@ -750,8 +750,8 @@ func (s *HTTPServer) handleStatsRequest(w http.ResponseWriter, r *http.Request) 
 
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(stats); err != nil {
-	logger.Warn("failed to encode HTTP response", "error", err)
-}
+		logger.Warn("failed to encode HTTP response", "error", err)
+	}
 
 }
 
@@ -773,8 +773,8 @@ func (s *HTTPServer) handleHealth(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(health); err != nil {
-	logger.Warn("failed to encode HTTP response", "error", err)
-}
+		logger.Warn("failed to encode HTTP response", "error", err)
+	}
 }
 
 // handleMetrics returns metrics in Prometheus or JSON format
@@ -821,7 +821,7 @@ func (s *HTTPServer) handleMetrics(w http.ResponseWriter, r *http.Request) {
 	if _, writeErr := fmt.Fprint(w, prometheusData); writeErr != nil {
 		logger.Warn("failed to write HTTP prometheusData response", "error", writeErr)
 	}
-	
+
 }
 
 // handleMetricsSummary serves a human-readable metrics summary

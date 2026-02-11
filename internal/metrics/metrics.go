@@ -1,4 +1,4 @@
-//Package metrics provides utilities for tracking metrics for trinity-cache
+// Package metrics provides utilities for tracking metrics for trinity-cache
 package metrics
 
 import (
@@ -16,24 +16,24 @@ type Metrics struct {
 	TotalBytesDownloaded int64
 
 	// Cache metrics
-	CacheHits           int64
-	CacheMisses         int64
-	PackagesInCache     int64
-	VersionsInCache     int64
+	CacheHits       int64
+	CacheMisses     int64
+	PackagesInCache int64
+	VersionsInCache int64
 
 	// Mirror metrics
-	MirrorSelections     int64
-	MirrorPenalties      int64
-	MirrorRecoveries     int64
+	MirrorSelections int64
+	MirrorPenalties  int64
+	MirrorRecoveries int64
 
 	// Timing metrics
-	AverageDownloadTime  time.Duration
-	AverageLookupTime    time.Duration
+	AverageDownloadTime time.Duration
+	AverageLookupTime   time.Duration
 
 	// Retention metrics
-	PackagesRemoved      int64
-	VersionsRemoved      int64
-	LastRetentionTime    time.Time
+	PackagesRemoved   int64
+	VersionsRemoved   int64
+	LastRetentionTime time.Time
 
 	mu sync.RWMutex
 }
