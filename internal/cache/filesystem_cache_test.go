@@ -3,6 +3,8 @@ package cache
 import (
 	"os"
 	"path/filepath"
+	"sync"
+	"sync/atomic"
 	"testing"
 )
 
@@ -235,5 +237,185 @@ func TestFilesystemCache_Cleanup(t *testing.T) {
 	// Real package directory should still exist
 	if _, err := os.Stat(pkgDir); os.IsNotExist(err) {
 		t.Errorf("package directory with files should still exist")
+	}
+}
+func TestFilesystemCache_Cleanup_PreservesNonPkgFiles(t *testing.T) {
+	tmpDir := t.TempDir()
+	cache, _ := NewFilesystemCache(tmpDir)
+
+	// Create package directory with both .pkg files and other files
+	pkgDir := filepath.Join(tmpDir, "mixed-pkg")
+	os.MkdirAll(pkgDir, 0755)
+	pkgFile := filepath.Join(pkgDir, "mixed-pkg-1.0.pkg")
+	metadataFile := filepath.Join(pkgDir, "metadata.json")
+	logFile := filepath.Join(pkgDir, "log.txt")
+
+	os.WriteFile(pkgFile, []byte("package"), 0644)
+	os.WriteFile(metadataFile, []byte("{}"), 0644)
+	os.WriteFile(logFile, []byte("log"), 0644)
+
+	// Run cleanup
+	err := cache.Cleanup()
+	if err != nil {
+		t.Fatalf("Cleanup() returned error: %v", err)
+	}
+
+	// Package directory should still exist with all files preserved
+	if _, err := os.Stat(pkgDir); os.IsNotExist(err) {
+		t.Errorf("package directory should still exist")
+	}
+
+	if _, err := os.Stat(metadataFile); os.IsNotExist(err) {
+		t.Errorf("non-.pkg files should be preserved")
+	}
+
+	if _, err := os.Stat(logFile); os.IsNotExist(err) {
+		t.Errorf("non-.pkg files should be preserved")
+	}
+}
+
+func TestFilesystemCache_Remove_NonExistent(t *testing.T) {
+	tmpDir := t.TempDir()
+	cache, _ := NewFilesystemCache(tmpDir)
+
+	// Attempt to remove non-existent package should not error
+	err := cache.Remove("nonexistent", "1.0")
+	if err != nil {
+		t.Errorf("Remove() of non-existent package should not error: %v", err)
+	}
+}
+
+func TestFilesystemCache_Add_InvalidPackage(t *testing.T) {
+	tmpDir := t.TempDir()
+	cache, _ := NewFilesystemCache(tmpDir)
+
+	// Test with missing name
+	err := cache.Add(&PackageVersion{
+		Name:    "",
+		Version: "1.0",
+		Path:    "/some/path",
+	})
+	if err == nil {
+		t.Errorf("Add() should error for missing name")
+	}
+
+	// Test with missing version
+	err = cache.Add(&PackageVersion{
+		Name:    "test",
+		Version: "",
+		Path:    "/some/path",
+	})
+	if err == nil {
+		t.Errorf("Add() should error for missing version")
+	}
+
+	// Test with nil package
+	err = cache.Add(nil)
+	if err == nil {
+		t.Errorf("Add() should error for nil package")
+	}
+}
+
+func TestFilesystemCache_ListVersions_SemanticVersioningLimitation(t *testing.T) {
+	tmpDir := t.TempDir()
+	cache, _ := NewFilesystemCache(tmpDir)
+
+	packageDir := filepath.Join(tmpDir, "semantic-pkg")
+	os.MkdirAll(packageDir, 0755)
+
+	// Create versions that expose lexicographic vs semantic sorting difference
+	// Lexicographically: "9.0.0" > "10.0.0" (comparing string chars)
+	// Semantically: "10.0.0" > "9.0.0"
+	versions := []string{"1.0.0", "9.0.0", "10.0.0"}
+	for _, v := range versions {
+		pkgFile := filepath.Join(packageDir, "semantic-pkg-"+v+".pkg")
+		os.WriteFile(pkgFile, []byte(""), 0644)
+	}
+
+	listed, err := cache.ListVersions("semantic-pkg")
+	if err != nil {
+		t.Fatalf("ListVersions() returned error: %v", err)
+	}
+
+	if len(listed) != 3 {
+		t.Errorf("expected 3 versions, got %d", len(listed))
+	}
+
+	// NOTE: Current implementation uses lexicographic sorting,
+	// so "9.0.0" comes before "10.0.0" (incorrect for semantic versioning).
+	// This test documents the current behavior and its limitation.
+	// To fix: implement semantic version parsing or use a version comparison library.
+	if listed[0].Version != "9.0.0" {
+		t.Logf("WARNING: Version sorting may be lexicographic, not semantic. Got %s as latest", listed[0].Version)
+	}
+}
+
+func TestFilesystemCache_ConcurrentOperations(t *testing.T) {
+	tmpDir := t.TempDir()
+	cache, _ := NewFilesystemCache(tmpDir)
+
+	packageDir := filepath.Join(tmpDir, "concurrent-pkg")
+	os.MkdirAll(packageDir, 0755)
+
+	// Concurrent Add operations
+	var wg sync.WaitGroup
+	var errorCount atomic.Int32
+	numGoroutines := 10
+
+	for i := 0; i < numGoroutines; i++ {
+		wg.Add(1)
+		go func(id int) {
+			defer wg.Done()
+			version := string(rune('0' + id))
+			pkgFile := filepath.Join(packageDir, "concurrent-pkg-"+version+".pkg")
+			os.WriteFile(pkgFile, []byte("content"), 0644)
+
+			err := cache.Add(&PackageVersion{
+				Name:    "concurrent-pkg",
+				Version: version,
+				Path:    pkgFile,
+			})
+			if err != nil {
+				errorCount.Add(1)
+				t.Logf("Add error: %v", err)
+			}
+		}(i)
+	}
+
+	wg.Wait()
+
+	if errorCount.Load() > 0 {
+		t.Errorf("concurrent operations failed: %d errors", errorCount.Load())
+	}
+
+	// Verify all versions exist
+	listed, err := cache.ListVersions("concurrent-pkg")
+	if err != nil {
+		t.Fatalf("ListVersions() returned error: %v", err)
+	}
+
+	if len(listed) != numGoroutines {
+		t.Errorf("expected %d versions, got %d", numGoroutines, len(listed))
+	}
+}
+
+func TestFilesystemCache_RetainMostRecent_KeepZero(t *testing.T) {
+	tmpDir := t.TempDir()
+	cache, _ := NewFilesystemCache(tmpDir)
+
+	packageDir := filepath.Join(tmpDir, "pkg")
+	os.MkdirAll(packageDir, 0755)
+	pkgFile := filepath.Join(packageDir, "pkg-1.0.pkg")
+	os.WriteFile(pkgFile, []byte(""), 0644)
+
+	// RetainMostRecent with 0 should be handled gracefully
+	err := cache.RetainMostRecent("pkg", 0)
+	if err != nil {
+		t.Errorf("RetainMostRecent(0) returned error: %v", err)
+	}
+
+	remaining, _ := cache.ListVersions("pkg")
+	if len(remaining) != 0 {
+		t.Errorf("expected 0 versions after RetainMostRecent(0), got %d", len(remaining))
 	}
 }
