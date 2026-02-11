@@ -196,7 +196,7 @@ func TestWorkerPool_Multiple_Tasks(t *testing.T) {
 		}
 	}
 
-	total, success, failed := pool.GetMetrics()
+	total, success, _ := pool.GetMetrics()
 	if int(success) != taskCount {
 		t.Errorf("expected %d successful downloads, got %d", taskCount, success)
 	}
@@ -278,7 +278,7 @@ func TestWorkerPool_GetMetrics(t *testing.T) {
 	// Wait a bit for processing
 	time.Sleep(500 * time.Millisecond)
 
-	total, success, failed := pool.GetMetrics()
+	total, _, _ := pool.GetMetrics()
 	if total < 1 {
 		t.Errorf("expected at least 1 total download tracked")
 	}
@@ -510,7 +510,7 @@ func TestWorkerPool_MetricsTracking(t *testing.T) {
 		}
 	}
 
-	finalTotal, finalSuccess, finalFailed := pool.GetMetrics()
+	finalTotal, _, _ := pool.GetMetrics()
 	if finalTotal < 5 {
 		t.Errorf("expected at least 5 total downloads tracked, got %d", finalTotal)
 	}

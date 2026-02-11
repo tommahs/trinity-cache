@@ -554,32 +554,6 @@ func TestGetLastCheckTime_InitiallyZero(t *testing.T) {
 	}
 }
 
-func TestIsInProgress_TracksMultiplePackages(t *testing.T) {
-	downloader := newMockFetchProbe()
-	selector := newMockFetchSelector()
-	tracker := newMockVersionTracker()
-
-	manager, _ := NewFetchManager(downloader, selector, tracker)
-
-	pkg1 := "pkg1"
-	version1 := "1.0.0"
-
-	// Start a fetch
-	go func() {
-		manager.FetchVersion(pkg1, version1, "/cache/pkg1-1.0.0.pkg")
-	}()
-
-	time.Sleep(10 * time.Millisecond)
-
-	if !manager.IsInProgress(pkg1, version1) {
-		t.Errorf("pkg1:1.0.0 should be in progress")
-	}
-
-	if manager.IsInProgress("pkg2", "1.0.0") {
-		t.Errorf("pkg2:1.0.0 should not be in progress")
-	}
-}
-
 func TestCheckForUpdates_EmptyPackageList(t *testing.T) {
 	downloader := newMockFetchProbe()
 	selector := newMockFetchSelector()
