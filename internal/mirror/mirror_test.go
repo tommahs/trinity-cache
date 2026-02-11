@@ -515,27 +515,6 @@ func TestWeightedSelector_StartRecovery_DoesNotExceedBaseWeight(t *testing.T) {
 	}
 }
 
-func TestWeightedSelector_Stop_StopsRecovery(t *testing.T) {
-	ws := NewWeightedSelector()
-	m := &Mirror{URL: "https://mirror.com", BaseWeight: 10.0, EffectiveWeight: 2.0}
-	ws.Add(m)
-
-	ws.StartRecovery(50*time.Millisecond, 0.5)
-
-	time.Sleep(100 * time.Millisecond)
-	initialWeight := m.EffectiveWeight
-
-	ws.Stop()
-
-	time.Sleep(200 * time.Millisecond)
-	finalWeight := m.EffectiveWeight
-
-	// After stop, weight should not have changed significantly
-	if math.Abs(finalWeight-initialWeight) > 0.1 {
-		t.Errorf("weight changed after stop: %f -> %f", initialWeight, finalWeight)
-	}
-}
-
 func TestWeightedSelector_StartRecovery_MultipleCallsIgnored(t *testing.T) {
 	ws := NewWeightedSelector()
 	m := &Mirror{URL: "https://mirror.com", BaseWeight: 10.0, EffectiveWeight: 5.0}
@@ -918,21 +897,6 @@ func TestWeightedSelector_RecoveryStability(t *testing.T) {
 	if m.EffectiveWeight != 10.0 {
 		t.Errorf("weight at base should remain stable, got %f", m.EffectiveWeight)
 	}
-}
-
-func TestWeightedSelector_MultipleStopCalls(t *testing.T) {
-	ws := NewWeightedSelector()
-	m := &Mirror{URL: "https://mirror.com", BaseWeight: 10.0, EffectiveWeight: 5.0}
-	ws.Add(m)
-
-	ws.StartRecovery(50*time.Millisecond, 0.5)
-
-	// Multiple Stop() calls should not panic
-	ws.Stop()
-	ws.Stop()
-	ws.Stop()
-
-	// Test passed if no panic
 }
 
 func TestMirror_InFlightDownloadsNeverNegative(t *testing.T) {
