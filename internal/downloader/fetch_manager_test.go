@@ -89,8 +89,9 @@ type mockFetchSelector struct {
 func newMockFetchSelector() *mockFetchSelector {
 	return &mockFetchSelector{
 		mirror: &mirror.Mirror{
-			URL:    "http://test.local",
-			Weight: 1.0,
+			URL:             "http://test.local",
+			BaseWeight:      1.0,
+			EffectiveWeight: 1.0,
 		},
 	}
 }
@@ -110,6 +111,25 @@ func (m *mockFetchSelector) Penalize(mir *mirror.Mirror, factor float64) {
 	if m.lastPenaltyFactor == 0 {
 		m.lastPenaltyFactor = factor
 	}
+}
+
+func (m *mockFetchSelector) Recover() {
+	// Mock implementation
+}
+
+func (m *mockFetchSelector) Add(mir *mirror.Mirror) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	// Mock implementation - just track that Add was called
+}
+
+func (m *mockFetchSelector) List() []*mirror.Mirror {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.mirror != nil {
+		return []*mirror.Mirror{m.mirror}
+	}
+	return []*mirror.Mirror{}
 }
 
 func (m *mockFetchSelector) GetPenaltyCalls() int32 {
