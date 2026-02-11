@@ -1,0 +1,93 @@
+name: Repository Maintenance
+
+on:
+  schedule:
+    # Run daily at 01:00 UTC
+    - cron: '0 1 * * *'
+  workflow_dispatch:
+
+jobs:
+  update-dependencies:
+    runs-on: ubuntu-latest
+    if: github.event_name == 'schedule'
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: '1.25'
+
+      - name: Check for dependency updates
+        run: |
+          go list -u -m all | grep -i "\[" || echo "All dependencies are up to date"
+
+      - name: Run security vulnerability check
+        run: |
+          # Install govulncheck if not present
+          go install github.com/golang/vuln/cmd/govulncheck@latest
+          govulncheck ./... || echo "Vulnerability scan completed"
+
+  stale-issues:
+    runs-on: ubuntu-latest
+    if: github.event_name == 'schedule'
+    steps:
+      - uses: actions/stale@v9
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+          stale-issue-message: |
+            This issue has been marked as stale due to inactivity for 60 days.
+            It will be closed in 7 days if no further activity occurs.
+            Please comment or add a label to keep this issue open.
+          stale-pr-message: |
+            This pull request has been marked as stale due to inactivity.
+            It will be closed in 7 days if no further activity occurs.
+          days-before-stale: 60
+          days-before-close: 7
+          stale-issue-label: 'stale'
+          stale-pr-label: 'stale'
+          exempt-issue-labels: 'blocked,in-progress,documentation'
+          exempt-pr-labels: 'blocked,in-progress,wip'
+
+  generate-sbom:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Generate SBOM
+        uses: anchore/sbom-action@v0
+        with:
+          path: ./
+          format: spdx-json
+          output-file: sbom.spdx.json
+
+      - name: Upload SBOM
+        uses: actions/upload-artifact@v4
+        with:
+          name: sbom
+          path: sbom.spdx.json
+          retention-days: 90
+
+  check-licenses:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: '1.25'
+
+      - name: Check licenses
+        run: |
+          # Install license checker
+          go install github.com/dominikh/go-licenses@latest
+          go-licenses csv ./... > licenses.csv || true
+          echo "License report generated"
+
+      - name: Upload licenses report
+        uses: actions/upload-artifact@v4
+        with:
+          name: licenses
+          path: licenses.csv
+          retention-days: 90

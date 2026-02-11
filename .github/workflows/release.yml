@@ -1,0 +1,60 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  create-release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: '1.25'
+
+      - name: Run tests
+        run: go test -v ./...
+
+      - name: Build artifacts
+        run: |
+          mkdir -p dist
+          GOOS=linux GOARCH=amd64 go build -o dist/trinity-cache-linux-amd64 ./cmd/trinity-cache
+          GOOS=darwin GOARCH=amd64 go build -o dist/trinity-cache-darwin-amd64 ./cmd/trinity-cache
+          GOOS=darwin GOARCH=arm64 go build -o dist/trinity-cache-darwin-arm64 ./cmd/trinity-cache
+          GOOS=windows GOARCH=amd64 go build -o dist/trinity-cache-windows-amd64.exe ./cmd/trinity-cache
+
+      - name: Generate checksums
+        run: |
+          cd dist
+          sha256sum * > SHA256SUMS
+          cd ..
+
+      - name: Create release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: dist/*
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  build-docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v6
+        with:
+          push: true
+          tags: |
+            tommahs/trinity-cache:latest
+            tommahs/trinity-cache:${{ github.ref_name }}
+          registry: docker.io

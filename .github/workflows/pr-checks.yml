@@ -1,0 +1,110 @@
+name: PR Quality Checks
+
+on:
+  pull_request:
+    types: [ opened, edited, synchronize ]
+
+jobs:
+  pr-title-check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Validate PR title format
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const pr = context.payload.pull_request;
+            const title = pr.title;
+            
+            // Check PR title format: type(scope): description
+            const validFormats = [
+              /^(feat|fix|docs|style|refactor|perf|test|chore)(\(.+\))?: .+/i,
+              /^(feat|fix|bugfix|feature|enhancement|improvement): .+/i,
+            ];
+            
+            const isValid = validFormats.some(format => format.test(title));
+            
+            if (!isValid) {
+              console.log('❌ PR title does not follow conventional commits format');
+              console.log('Suggested formats:');
+              console.log('- feat(scope): add new feature');
+              console.log('- fix(scope): fix bug');
+              console.log('- docs: update documentation');
+              console.log('- test: add comprehensive tests');
+              core.setFailed('Invalid PR title format');
+            } else {
+              console.log('✅ PR title format is valid');
+            }
+
+  pr-size-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Check PR size
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const pr = context.payload.pull_request;
+            const additions = pr.additions;
+            const deletions = pr.deletions;
+            const changed_files = pr.changed_files;
+            
+            console.log(`📊 PR Statistics:`);
+            console.log(`  Files changed: ${changed_files}`);
+            console.log(`  Additions: ${additions}`);
+            console.log(`  Deletions: ${deletions}`);
+            
+            const totalChanges = additions + deletions;
+            
+            if (totalChanges > 1000) {
+              console.log('⚠️  This is a large PR (>1000 lines changed)');
+              console.log('Consider breaking this into smaller PRs for easier review.');
+            }
+            
+            if (changed_files > 20) {
+              console.log('⚠️  This PR touches many files (>20)');
+              console.log('Consider focusing changes to fewer files per PR.');
+            }
+
+  commit-message-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Validate commit messages
+        run: |
+          # Get commits in this PR
+          commits=$(git log origin/main..HEAD --format=%H)
+          
+          if [ -z "$commits" ]; then
+            echo "No commits to check"
+            exit 0
+          fi
+          
+          invalid_commits=0
+          
+          for commit in $commits; do
+            subject=$(git log -1 --format=%s "$commit")
+            
+            # Check subject line length (max 72 characters recommended)
+            subject_len=${#subject}
+            if [ $subject_len -gt 100 ]; then
+              echo "❌ Commit $(git log -1 --format=%h $commit): Subject too long ($subject_len chars)"
+              invalid_commits=$((invalid_commits + 1))
+            fi
+            
+            # Check subject line starts with capital
+            first_char=${subject:0:1}
+            if [[ $first_char =~ [[:lower:]] ]]; then
+              echo "⚠️  Commit $(git log -1 --format=%h $commit): Subject should start with capital letter"
+            fi
+          done
+          
+          if [ $invalid_commits -gt 0 ]; then
+            echo "Found $invalid_commits commits with issues"
+            exit 1
+          fi
