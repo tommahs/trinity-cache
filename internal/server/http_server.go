@@ -113,7 +113,9 @@ func (s *HTTPServer) Shutdown(ctx context.Context) error {
 	close(s.shutdownChan)
 
 	// Wait for graceful shutdown with timeout
+	// 
 	if ctx == nil {
+		//nolint:contextcheck // allow default background context when ctx is nil
 		ctx = context.Background()
 	}
 
@@ -131,7 +133,9 @@ func (s *HTTPServer) Shutdown(ctx context.Context) error {
 		return err
 	case <-ctx.Done():
 		logger.Warn("HTTP server shutdown timeout, forcing close")
-		s.httpServer.Close()
+		if err := s.httpServer.Close(); err !=nil {
+			logger.Error("error closing http server", "error", err)
+		}
 		s.mu.Lock()
 		s.running = false
 		s.mu.Unlock()
@@ -434,8 +438,8 @@ func (s *HTTPServer) moveFileToCache(tempPath, cachePath string) error {
 	}
 
 	// Create cache directory if it doesn't exist
-	cacheDir := fmt.Sprintf("%s/%s", filepath.Dir(cachePath), "")
-	cacheDir = filepath.Dir(cachePath)
+	// cacheDir := fmt.Sprintf("%s/%s", filepath.Dir(cachePath), "")
+	cacheDir := filepath.Dir(cachePath)
 	if err := os.MkdirAll(cacheDir, 0755); err != nil {
 		return fmt.Errorf("failed to create cache directory: %w", err)
 	}
@@ -670,7 +674,7 @@ func (s *HTTPServer) handleMetrics(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
 	w.WriteHeader(http.StatusOK)
-	fmt.Fprint(w, prometheusData)
+	fmt.Sprint(w, prometheusData)
 }
 
 // handleMetricsSummary serves a human-readable metrics summary
@@ -699,7 +703,12 @@ func (s *HTTPServer) ServePackage(w http.ResponseWriter, pkgPath string) error {
 		w.WriteHeader(http.StatusInternalServerError)
 		return err
 	}
-	defer file.Close()
+	// Ensure file is closed properly
+	defer func() {
+		if err := file.Close(); err == nil {
+			err = fmt.Errorf("close temp file: %w", err)
+		}
+	}()
 
 	// Get file info for headers
 	fi, err := file.Stat()

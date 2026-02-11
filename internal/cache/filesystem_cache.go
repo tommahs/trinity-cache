@@ -349,7 +349,13 @@ func copyFile(src, dst string) error {
 	if err != nil {
 		return err
 	}
-	defer in.Close()
+
+	defer func() {
+		if err := in.Close(); err != nil {
+			// handle appropriately
+			logger.Error("failed to close file: %v", err)
+		}
+	}()
 
 	out, err := os.Create(dst)
 	if err != nil {

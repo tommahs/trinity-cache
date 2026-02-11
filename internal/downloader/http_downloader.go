@@ -5,7 +5,6 @@ import (
 	"crypto/sha256"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"net/http"
 	"os"
 	"sync"
@@ -132,69 +131,91 @@ func (hd *HTTPDownloader) Download(m *mirror.Mirror, pkgPath string) (*Result, e
 }
 
 // downloadFromMirror performs the actual HTTP download from a specific mirror.
-func (hd *HTTPDownloader) downloadFromMirror(m *mirror.Mirror, pkgPath string) (*Result, error) {
+func (hd *HTTPDownloader) downloadFromMirror(
+	m *mirror.Mirror,
+	pkgPath string,
+) (res *Result, err error) {
+
 	// Mark download as in-flight
 	m.AddInFlightDownload()
 	defer m.RemoveInFlightDownload()
 
-	// Construct URL
 	url := fmt.Sprintf("%s/%s", m.URL, pkgPath)
 
-	// Download to temporary file
-	tempFile, err := ioutil.TempFile(hd.tempDir, "pkg-*.tmp")
+	// Create temp file
+	tempFile, err := os.CreateTemp(hd.tempDir, "pkg-*.tmp")
 	if err != nil {
 		return nil, fmt.Errorf("failed to create temp file: %w", err)
 	}
-	defer tempFile.Close()
 
-	// Create context with mirror-specific timeout
-	// Use a context with the timeout from the mirror, or fall back to the default client timeout
+	// Ensure file is closed properly
+	defer func() {
+		if cerr := tempFile.Close(); cerr != nil && err == nil {
+			err = fmt.Errorf("close temp file: %w", cerr)
+		}
+	}()
+
+	// Ensure temp file is removed on failure
+	defer func() {
+		if err != nil {
+			if rerr := os.Remove(tempFile.Name()); rerr != nil {
+				logger.Warn("failed to remove tempfile",
+					"tempfilename", tempFile.Name(),
+					"error", rerr,
+				)
+			}
+		}
+	}()
+
+	// Create request context
 	ctx, cancel := context.WithTimeout(context.Background(), hd.timeout)
 	defer cancel()
 
-	// Perform HTTP GET
-	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
-		os.Remove(tempFile.Name())
-		return nil, fmt.Errorf("failed to create HTTP request: %w", err)
+		return nil, fmt.Errorf("create HTTP request: %w", err)
 	}
 
 	resp, err := hd.httpClient.Do(req)
 	if err != nil {
-		os.Remove(tempFile.Name())
 		return nil, fmt.Errorf("HTTP request failed: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() {
+		if cerr := resp.Body.Close(); cerr != nil {
+			logger.Warn("failed to close response body", "error", cerr)
+		}
+	}()
 
 	if resp.StatusCode != http.StatusOK {
-		os.Remove(tempFile.Name())
 		return nil, fmt.Errorf("HTTP error: %d", resp.StatusCode)
 	}
 
-	// Write to temp file and calculate checksum
+	// Write body + compute checksum
 	hash := sha256.New()
 	writer := io.MultiWriter(tempFile, hash)
 
 	size, err := io.Copy(writer, resp.Body)
 	if err != nil {
-		os.Remove(tempFile.Name())
-		return nil, fmt.Errorf("failed to write to temp file: %w", err)
+		return nil, fmt.Errorf("write temp file: %w", err)
 	}
 
-	tempFile.Close()
-
-	// Verify content length if provided
-	contentLength := resp.ContentLength
-	if contentLength > 0 && size != contentLength {
-		os.Remove(tempFile.Name())
-		return nil, fmt.Errorf("size mismatch: got %d, expected %d", size, contentLength)
+	// Verify content length
+	if resp.ContentLength > 0 && size != resp.ContentLength {
+		return nil, fmt.Errorf(
+			"size mismatch: got %d, expected %d",
+			size,
+			resp.ContentLength,
+		)
 	}
 
 	checksum := fmt.Sprintf("%x", hash.Sum(nil))
 
-	// For now, just return the result with temp path
-	// In production, we'd move it to the final location and store checksum
-	logger.Debug("package downloaded and verified", "path", pkgPath, "size", size, "checksum", checksum[:16]+"...")
+	logger.Debug(
+		"package downloaded and verified",
+		"path", pkgPath,
+		"size", size,
+		"checksum", checksum[:16]+"...",
+	)
 
 	return &Result{
 		Path:     tempFile.Name(),
@@ -202,6 +223,7 @@ func (hd *HTTPDownloader) downloadFromMirror(m *mirror.Mirror, pkgPath string) (
 		Checksum: checksum,
 	}, nil
 }
+
 
 // SetRetries sets the number of retry attempts.
 func (hd *HTTPDownloader) SetRetries(count int) {
@@ -224,8 +246,11 @@ func (hd *HTTPDownloader) Verify(filePath, expectedChecksum string) error {
 	if err != nil {
 		return fmt.Errorf("failed to open file: %w", err)
 	}
-	defer f.Close()
-
+	defer func() {
+		if err := f.Close(); err == nil {
+			err = fmt.Errorf("close temp file: %w", err)
+		}
+	}()
 	hash := sha256.New()
 	if _, err := io.Copy(hash, f); err != nil {
 		return fmt.Errorf("failed to compute checksum: %w", err)

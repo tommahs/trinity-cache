@@ -1,3 +1,4 @@
+// metrics provides utilities for tracking metrics for trinity-cache
 package metrics
 
 import (
@@ -128,7 +129,6 @@ func UpdateCacheStats(packages, versions int64) {
 func GetMetrics() Metrics {
 	globalMetrics.mu.RLock()
 	defer globalMetrics.mu.RUnlock()
-
 	snapshot := *globalMetrics
 	return snapshot
 }

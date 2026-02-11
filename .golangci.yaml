@@ -1,0 +1,43 @@
+version: "2"
+
+run:
+  timeout: 5m
+  tests: false
+
+  # Skip entire directories
+  skip-dirs:
+    - vendor
+    - third_party
+    - internal/experimental
+    - .github
+    - bin
+    - data
+    - docs
+
+linters:
+  enable:
+    - govet
+    - staticcheck
+    - errcheck
+    - ineffassign
+    - unused
+    - gocyclo
+    - revive
+    - bodyclose
+    - contextcheck
+
+  # disable:
+  #   - lll  # example: disable long-line linter globally
+
+linters-settings:
+  gocyclo:
+    min-complexity: 15
+
+  revive:
+    severity: warning
+
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0
+
+  exclude-use-default: false

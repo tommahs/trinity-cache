@@ -186,9 +186,13 @@ func NewApplication(cfg *config.Config) (*Application, error) {
 
 	// Initialize retention manager with configured values
 	retention := cache.NewRetentionManager(cacheManager)
-	retention.SetRetentionCount(cfg.Retention.KeepVersions)
+	if err := retention.SetRetentionCount(cfg.Retention.KeepVersions); err != nil {
+		return nil, fmt.Errorf("failed to set retention to %v", cfg.Retention.KeepVersions)
+	}
 	enforcementInterval := time.Duration(cfg.Retention.EnforcementInterval * float64(time.Hour))
-	retention.StartPeriodicEnforcement(enforcementInterval)
+	if err := retention.StartPeriodicEnforcement(enforcementInterval); err != nil {
+		return nil, fmt.Errorf("failed to set enforcementInterval to %v", enforcementInterval)
+	}
 
 	// Initialize version tracker
 	versionTracker, err := versiontracker.NewInMemoryTracker(cacheManager)
@@ -267,7 +271,11 @@ func (app *Application) Shutdown() error {
 
 	// Stop worker pool
 	logger.Debug("stopping download worker pool")
-	app.workerPool.Stop()
+	
+	if err := app.workerPool.Stop(); err != nil {
+		logger.Error("application error", "error", err)
+		os.Exit(1)
+	}
 	app.workerPool.WaitForCompletion()
 
 	// Stop mirror recovery
