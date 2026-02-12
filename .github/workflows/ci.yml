@@ -11,12 +11,16 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
+
       - name: Set up Go
         uses: actions/setup-go@v6
         with:
-          go-version: '1.24'
+          go-version-file: go.mod
+          check-latest: true
+
       - name: Run tests
         run: go test -v -race -coverprofile=coverage.out ./...
+
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v3
         with:
@@ -29,15 +33,19 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
+
       - name: Set up Go
         uses: actions/setup-go@v6
         with:
-          go-version: '1.24'
+          go-version-file: go.mod
+          check-latest: true
+
       - name: Run golangci-lint
         uses: golangci/golangci-lint-action@v6
         with:
-          version: latest
+          version: v2.8.0
           args: --timeout=5m
+
       - name: Check formatting
         run: |
           if [ -n "$(gofmt -l .)" ]; then
@@ -51,10 +59,13 @@ jobs:
     needs: [ test, lint ]
     steps:
       - uses: actions/checkout@v6
+
       - name: Set up Go
         uses: actions/setup-go@v6
         with:
-          go-version: '1.24'
+          go-version-file: go.mod
+          check-latest: true
+
       - name: Build
         run: go build -v ./...
 
@@ -63,9 +74,9 @@ jobs:
     needs: build
     steps:
       - uses: actions/checkout@v6
+
       - name: Build Docker image
         uses: docker/build-push-action@v6
         with:
           push: false
           tags: trinity-cache:ci
-
