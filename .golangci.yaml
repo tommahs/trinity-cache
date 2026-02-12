@@ -16,6 +16,3 @@ linters:
     - revive
     - bodyclose
     - contextcheck
-
-  revive:
-    severity: warning
