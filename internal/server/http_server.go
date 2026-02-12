@@ -701,7 +701,7 @@ func (s *HTTPServer) handleFetchRequest(w http.ResponseWriter, r *http.Request) 
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	if err := 	json.NewEncoder(w).Encode(map[string]interface{}{
+	if err := json.NewEncoder(w).Encode(map[string]interface{}{
 		"name":      name,
 		"version":   version,
 		"size":      result.Size,

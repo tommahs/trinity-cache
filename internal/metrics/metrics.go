@@ -126,6 +126,7 @@ func UpdateCacheStats(packages, versions int64) {
 }
 
 // GetMetrics returns a snapshot of current metrics
+//
 //nolint:govet
 func GetMetrics() Metrics {
 	globalMetrics.mu.RLock()
@@ -215,6 +216,7 @@ func updateAverageDuration(current *time.Duration, newDuration time.Duration) {
 }
 
 // MetricsSnapshot is a point-in-time snapshot of metrics
+//
 //nolint:revive
 type MetricsSnapshot struct {
 	Timestamp time.Time
