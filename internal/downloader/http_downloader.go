@@ -7,7 +7,7 @@ import (
 	"io"
 	"net/http"
 	"os"
-	"sync"
+	// "sync"
 	"time"
 
 	"github.com/tommahs/trinity-cache/internal/logger"
@@ -25,7 +25,7 @@ type HTTPDownloader struct {
 	selector   mirror.Selector
 	cache      Cache
 	httpClient *http.Client
-	dedupesMu  sync.Mutex
+	// dedupesMu  sync.Mutex
 	// dedupes     map[string]*deduplicationEntry // key: sha256(url+name+version)
 	tempDir string
 	retries int

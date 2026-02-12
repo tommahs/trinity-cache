@@ -701,14 +701,17 @@ func (s *HTTPServer) handleFetchRequest(w http.ResponseWriter, r *http.Request) 
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(map[string]interface{}{
+	if err := 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"name":      name,
 		"version":   version,
 		"size":      result.Size,
 		"checksum":  result.Checksum,
 		"path":      result.Path,
 		"timestamp": time.Now(),
-	})
+	}); err != nil {
+		logger.Warn("failed to encode HTTP response", "error", err)
+	}
+
 }
 
 // handleStatsRequest returns cache statistics
@@ -805,7 +808,7 @@ func (s *HTTPServer) handleMetrics(w http.ResponseWriter, r *http.Request) {
 		// Return JSON format for backward compatibility
 		metricsData := metrics.GetMetricsJSON()
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(metricsData)
+		// json.NewEncoder(w).Encode(metricsData)
 		if err := json.NewEncoder(w).Encode(metricsData); err != nil {
 			logger.Warn("failed to encode HTTP response", "error", err)
 		}

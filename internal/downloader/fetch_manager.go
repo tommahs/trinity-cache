@@ -44,6 +44,7 @@ func NewFetchManager(downloader Downloader, selector mirror.Selector, tracker Ve
 
 // FetchIfNeeded checks if a newer version exists and fetches it if available
 // Returns whether a fetch was performed
+//nolint:revive
 func (fm *FetchManager) FetchIfNeeded(name, currentVersion string) (bool, error) {
 	if name == "" {
 		return false, fmt.Errorf("package name cannot be empty")
