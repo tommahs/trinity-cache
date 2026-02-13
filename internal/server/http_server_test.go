@@ -188,60 +188,6 @@ func TestHTTPServer_HandleMetrics(t *testing.T) {
 	}
 }
 
-func TestHTTPServer_HandlePackageRequest_GET(t *testing.T) {
-	tempDir := t.TempDir()
-	cacheManager, err := cache.NewFilesystemCache(tempDir)
-	if err != nil {
-		t.Errorf("expected error to be empty")
-	}
-	server, _ := NewHTTPServer(cacheManager, ":0", 30, 30)
-
-	req := httptest.NewRequest("GET", "/api/v1/packages/myapp/1.0", nil)
-	w := httptest.NewRecorder()
-
-	server.handlePackageRequest(w, req)
-
-	if w.Code != http.StatusOK {
-		t.Errorf("expected 200, got %d", w.Code)
-	}
-}
-
-func TestHTTPServer_HandlePackageRequest_HEAD(t *testing.T) {
-	tempDir := t.TempDir()
-	cacheManager, err := cache.NewFilesystemCache(tempDir)
-	if err != nil {
-		t.Errorf("expected error to be empty")
-	}
-	server, _ := NewHTTPServer(cacheManager, ":0", 30, 30)
-
-	req := httptest.NewRequest("HEAD", "/api/v1/packages/myapp/1.0", nil)
-	w := httptest.NewRecorder()
-
-	server.handlePackageRequest(w, req)
-
-	if w.Code != http.StatusOK {
-		t.Errorf("expected 200, got %d", w.Code)
-	}
-}
-
-func TestHTTPServer_HandlePackageRequest_MethodNotAllowed(t *testing.T) {
-	tempDir := t.TempDir()
-	cacheManager, err := cache.NewFilesystemCache(tempDir)
-	if err != nil {
-		t.Errorf("expected error to be empty")
-	}
-	server, _ := NewHTTPServer(cacheManager, ":0", 30, 30)
-
-	req := httptest.NewRequest("POST", "/api/v1/packages/myapp/1.0", nil)
-	w := httptest.NewRecorder()
-
-	server.handlePackageRequest(w, req)
-
-	if w.Code != http.StatusMethodNotAllowed {
-		t.Errorf("expected 405, got %d", w.Code)
-	}
-}
-
 func TestHTTPServer_SetCache(t *testing.T) {
 	tempDir := t.TempDir()
 	cache1, err := cache.NewFilesystemCache(tempDir)
@@ -297,64 +243,6 @@ func TestHTTPServer_GracefulShutdownWithTimeout(t *testing.T) {
 	err = server.Shutdown(ctx)
 	if err != nil {
 		t.Fatalf("shutdown error: %v", err)
-	}
-}
-
-func TestHTTPServer_HandleFetchRequest_NoManager(t *testing.T) {
-	tempDir := t.TempDir()
-	cacheManager, err := cache.NewFilesystemCache(tempDir)
-	if err != nil {
-		t.Fatalf("cacheManager error: %v", err)
-	}
-	server, _ := NewHTTPServer(cacheManager, ":0", 30, 30)
-
-	req := httptest.NewRequest("POST", "/api/v1/fetch/myapp/1.0", nil)
-	w := httptest.NewRecorder()
-
-	server.handleFetchRequest(w, req)
-
-	if w.Code != http.StatusServiceUnavailable {
-		t.Errorf("expected 503, got %d", w.Code)
-	}
-}
-
-func TestHTTPServer_HandleFetchRequest_InvalidPath(t *testing.T) {
-	tempDir := t.TempDir()
-	cacheManager, err := cache.NewFilesystemCache(tempDir)
-	if err != nil {
-		t.Fatalf("cacheManager error: %v", err)
-	}
-	server, _ := NewHTTPServer(cacheManager, ":0", 30, 30)
-	// Without fetch manager, returns 503 before path validation
-	// So this test just verifies the error handling
-
-	req := httptest.NewRequest("POST", "/api/v1/fetch/", nil)
-	w := httptest.NewRecorder()
-
-	server.handleFetchRequest(w, req)
-
-	// Returns 503 since fetchManager is nil (checked before path validation)
-	if w.Code != http.StatusServiceUnavailable {
-		t.Errorf("expected 503, got %d", w.Code)
-	}
-}
-
-func TestHTTPServer_HandleFetchRequest_MethodNotAllowed(t *testing.T) {
-	tempDir := t.TempDir()
-	cacheManager, err := cache.NewFilesystemCache(tempDir)
-	if err != nil {
-		t.Fatalf("cacheManager error: %v", err)
-	}
-	server, _ := NewHTTPServer(cacheManager, ":0", 30, 30)
-
-	req := httptest.NewRequest("DELETE", "/api/v1/fetch/myapp/1.0", nil)
-	w := httptest.NewRecorder()
-
-	server.handleFetchRequest(w, req)
-
-	// Returns 503 since fetchManager check happens first
-	if w.Code != http.StatusServiceUnavailable {
-		t.Errorf("expected 503, got %d", w.Code)
 	}
 }
 
@@ -877,50 +765,6 @@ func TestHTTPServer_HandleStats_MethodNotAllowed(t *testing.T) {
 	}
 }
 
-func TestHTTPServer_HandlePackageRequest_EmptyPath(t *testing.T) {
-	cacheManager, _ := cache.NewFilesystemCache(t.TempDir())
-	server, _ := NewHTTPServer(cacheManager, ":0", 30, 30)
-
-	req := httptest.NewRequest("GET", "/api/v1/packages/", nil)
-	w := httptest.NewRecorder()
-
-	server.handlePackageRequest(w, req)
-
-	if w.Code != http.StatusBadRequest {
-		t.Errorf("expected 400 for empty package path, got %d", w.Code)
-	}
-}
-
-func TestHTTPServer_HandleFetchRequest_MissingVersion(t *testing.T) {
-	cacheManager, _ := cache.NewFilesystemCache(t.TempDir())
-	server, _ := NewHTTPServer(cacheManager, ":0", 30, 30)
-
-	req := httptest.NewRequest("GET", "/api/v1/fetch/myapp", nil)
-	w := httptest.NewRecorder()
-
-	server.handleFetchRequest(w, req)
-
-	// Returns 503 since fetchManager check happens before path validation
-	if w.Code != http.StatusServiceUnavailable {
-		t.Errorf("expected 503, got %d", w.Code)
-	}
-}
-
-func TestHTTPServer_HandleFetchRequest_EmptyName(t *testing.T) {
-	cacheManager, _ := cache.NewFilesystemCache(t.TempDir())
-	server, _ := NewHTTPServer(cacheManager, ":0", 30, 30)
-
-	req := httptest.NewRequest("GET", "/api/v1/fetch//1.0", nil)
-	w := httptest.NewRecorder()
-
-	server.handleFetchRequest(w, req)
-
-	// Returns 503 since fetchManager check happens before path validation
-	if w.Code != http.StatusServiceUnavailable {
-		t.Errorf("expected 503, got %d", w.Code)
-	}
-}
-
 func TestHTTPServer_HandlePacmanRequest_RootPath(t *testing.T) {
 	cacheManager, _ := cache.NewFilesystemCache(t.TempDir())
 	server, _ := NewHTTPServer(cacheManager, ":0", 30, 30)
@@ -1129,20 +973,6 @@ func TestHTTPServer_CustomAddress(t *testing.T) {
 	}
 }
 
-func TestHTTPServer_HandlePackageRequest_ContentHeaders(t *testing.T) {
-	cacheManager, _ := cache.NewFilesystemCache("/var/lib/trinity-cache")
-	server, _ := NewHTTPServer(cacheManager, ":0", 30, 30)
-
-	req := httptest.NewRequest("GET", "/api/v1/packages/myapp/1.0", nil)
-	w := httptest.NewRecorder()
-
-	server.handlePackageRequest(w, req)
-
-	if w.Header().Get("Content-Type") != "application/octet-stream" {
-		t.Errorf("expected application/octet-stream")
-	}
-}
-
 func TestHTTPServer_ConcurrentHealthChecks(t *testing.T) {
 	cacheManager, _ := cache.NewFilesystemCache("/var/lib/trinity-cache")
 	server, _ := NewHTTPServer(cacheManager, ":0", 30, 30)
@@ -1169,33 +999,6 @@ func TestHTTPServer_ConcurrentHealthChecks(t *testing.T) {
 	}
 
 	wg.Wait()
-}
-
-func TestHTTPServer_HandleFetchRequest_GET_vs_POST(t *testing.T) {
-	cacheManager, _ := cache.NewFilesystemCache("/var/lib/trinity-cache")
-	server, _ := NewHTTPServer(cacheManager, ":0", 30, 30)
-
-	tests := []struct {
-		method       string
-		expectedCode int
-	}{
-		// All return 503 since fetchManager check happens before method/path validation
-		{"GET", http.StatusServiceUnavailable},
-		{"POST", http.StatusServiceUnavailable},
-		{"DELETE", http.StatusServiceUnavailable},
-		{"PUT", http.StatusServiceUnavailable},
-	}
-
-	for _, tc := range tests {
-		req := httptest.NewRequest(tc.method, "/api/v1/fetch/app/1.0", nil)
-		w := httptest.NewRecorder()
-
-		server.handleFetchRequest(w, req)
-
-		if w.Code != tc.expectedCode {
-			t.Errorf("method %s: expected %d, got %d", tc.method, tc.expectedCode, w.Code)
-		}
-	}
 }
 
 func TestHTTPServer_MoveFileToCache_WithCopyFallback(t *testing.T) {

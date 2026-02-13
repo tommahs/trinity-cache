@@ -691,7 +691,7 @@ func (s *HTTPServer) handleMetrics(w http.ResponseWriter, r *http.Request) {
 		// Return JSON format for backward compatibility
 		metricsData := metrics.GetMetricsJSON()
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(metricsData)
+		
 		if err := json.NewEncoder(w).Encode(metricsData); err != nil {
 			logger.Warn("failed to encode HTTP response", "error", err)
 		}
