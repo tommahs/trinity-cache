@@ -5,56 +5,77 @@ on:
     tags:
       - 'v*'
 
+# Allow releases and package pushes using the built-in token
+permissions:
+  contents: write
+  packages: write
+
 jobs:
-  create-release:
+  release:
+    name: Build / Docker / Release
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - name: Checkout repository
+        uses: actions/checkout@v6
 
       - name: Set up Go
         uses: actions/setup-go@v6
         with:
-          go-version: '1.24'
+          go-version-file: go.mod
+          check-latest: true
 
-      - name: Run tests
-        run: go test -v ./...
+      - name: Run unit tests
+        run: make test
 
-      - name: Build artifacts
-        run: |
-          mkdir -p dist
-          GOOS=linux GOARCH=amd64 go build -o dist/trinity-cache-linux-amd64 ./cmd/trinity-cache
-          GOOS=darwin GOARCH=amd64 go build -o dist/trinity-cache-darwin-amd64 ./cmd/trinity-cache
-          GOOS=darwin GOARCH=arm64 go build -o dist/trinity-cache-darwin-arm64 ./cmd/trinity-cache
-          GOOS=windows GOARCH=amd64 go build -o dist/trinity-cache-windows-amd64.exe ./cmd/trinity-cache
+      - name: Build binaries & package
+        run: make package VERSION=${{ github.ref_name }}
 
-      - name: Generate checksums
-        run: |
-          cd dist
-          sha256sum * > SHA256SUMS
-          cd ..
-
-      - name: Create release
-        uses: softprops/action-gh-release@v1
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v2
         with:
-          files: dist/*
-          draft: false
-          prerelease: false
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build & push Docker image (via Makefile)
+        run: make docker-build OWNER=${{ github.repository_owner }} VERSION=${{ github.ref_name }}
+
+      - name: Create GitHub Release (auto notes)
+        id: create_release
+        uses: actions/create-release@v1
+        with:
+          tag_name: ${{ github.ref_name }}
+          release_name: ${{ github.ref_name }}
+          generate_release_notes: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-  build-docker:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v6
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Build and push Docker image
-        uses: docker/build-push-action@v6
+      - name: Upload linux-amd64 archive to release
+        uses: actions/upload-release-asset@v1
         with:
-          push: true
-          tags: |
-            tommahs/trinity-cache:latest
-            tommahs/trinity-cache:${{ github.ref_name }}
-          registry: docker.io
+          upload_url: ${{ steps.create_release.outputs.upload_url }}
+          asset_path: dist/trinity-cache_${{ github.ref_name }}_linux-amd64.tar.gz
+          asset_name: trinity-cache_${{ github.ref_name }}_linux-amd64.tar.gz
+          asset_content_type: application/gzip
+
+      - name: Upload linux-arm64 archive to release
+        uses: actions/upload-release-asset@v1
+        with:
+          upload_url: ${{ steps.create_release.outputs.upload_url }}
+          asset_path: dist/trinity-cache_${{ github.ref_name }}_linux-arm64.tar.gz
+          asset_name: trinity-cache_${{ github.ref_name }}_linux-arm64.tar.gz
+          asset_content_type: application/gzip
+
+      - name: Append Docker pull instructions to release body
+        uses: actions/github-script@v6
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const tag = context.ref.replace('refs/tags/', '');
+            const ver = tag.replace(/^v/, '');
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const release = await github.rest.repos.getReleaseByTag({ owner, repo, tag });
+            const pullInstructions = `\n\n### Docker\n\nPull the images from GitHub Container Registry:\n\n\`\`\`bash\ndocker pull ghcr.io/${owner}/${repo}:latest\ndocker pull ghcr.io/${owner}/${repo}:${ver}\ndocker pull ghcr.io/${owner}/${repo}:${ver.split('.')[0]}\ndocker pull ghcr.io/${owner}/${repo}:${ver.split('.').slice(0,2).join('.')}\n\`\`\`\n`;
+            const body = (release.data.body || '') + pullInstructions;
+            await github.rest.repos.updateRelease({ owner, repo, release_id: release.data.id, body });
