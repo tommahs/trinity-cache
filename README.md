@@ -1,122 +1,137 @@
 # Trinity-cache
+[![CI](https://img.shields.io/github/actions/workflow/status/tommahs/trinity-cache/ci.yml?branch=main&label=CI&style=flat-square)](https://github.com/tommahs/trinity-cache/actions)
+[![Release](https://img.shields.io/github/v/release/tommahs/trinity-cache?style=flat-square)](https://github.com/tommahs/trinity-cache/releases)
+[![Go](https://img.shields.io/badge/go-1.25-blue?style=flat-square)](https://golang.org)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green?style=flat-square)](LICENSE)
 
-Trinity-cache is a Go-based system for fetching, caching, and serving Arch Linux packages.
+**Trinity-cache** is a high-performance Go service for fetching, caching, and serving Arch Linux packages from upstream mirrors.
 
-At its core, it downloads packages from Arch Linux mirrors using **concurrent HTTP downloads** and **dynamic mirror weighting** to distribute load fairly across mirrors. Beyond downloading, Trinity-cache maintains a local package cache, keeps recent versions, and serves packages on demand.
+It combines intelligent mirror scheduling, concurrent downloads, and controlled retention into a lightweight package distribution layer designed for real-world infrastructure.
 
-The project is designed to grow into a lightweight, intelligent package distribution layer rather than a single-purpose downloader.
+## Why Trinity-cache?
 
----
+If you run multiple Arch Linux systems — whether in CI, labs, clusters, or enterprise environments — you’ve likely encountered:
 
-## Project Scope
+- Repeated downloads of identical packages
+- Uneven upstream mirror performance
+- Rate limited or slow mirror responses
+- Lack of visibility into package distribution
+- Uncontrolled disk growth from naive caching
 
-Trinity-cache aims to:
+Trinity-cache sits between your infrastructure and upstream mirrors, acting as:
 
-- Download the latest Arch Linux packages from upstream mirrors
-- Cache packages locally
-- Retain the **two most recent versions** of each package
-- Serve cached packages to clients
-- Fetch newer versions automatically when requested
-- Distribute mirror usage dynamically to avoid overloading any single mirror
+- A performance accelerator  
+- A fair mirror load distributor  
+- A controlled local package cache  
+- An observable package gateway 
 
----
+It is not just a downloader — it is a smart edge for package distribution.
 
-## Features
+## Core Capabilities
 
-- ⚡ Concurrent package downloads over HTTP
-- 🪞 Mirror-aware fetching with dynamic weight adjustment
-- 🔄 Actively rotates mirrors by penalizing recently used ones
-- 📦 Local package cache with version tracking
-- 🕒 Keeps the two most recent versions of each package
-- 📡 On-demand fetching when a newer version is requested
-- 📄 YAML-based configuration
-- 🚀 Written in Go for performance and simplicity
-# Trinity-cache
+### Concurrent Download Engine
+High-performance worker pool for parallel HTTP downloads.
 
-Trinity-cache is a focused, production-oriented service that fetches, caches, and serves Arch Linux packages from upstream mirrors with concurrency, mirror-aware scheduling, and simple retention rules.
+### Intelligent Mirror Scheduling
+- Mirrors have configurable base weights  
+- Effective weights dynamically adjust  
+- Recently used mirrors are temporarily penalized  
+- Weights recover over time  
 
-This repository contains a Go implementation intended for deployment behind a reverse proxy or load balancer. It is optimized for reliability and observability in production environments.
+This prevents repeatedly hammering a single mirror and distributes load fairly.
 
-Highlights:
-- Concurrent HTTP downloads with a worker pool
-- Dynamic mirror weighting and temporary penalization after selection
-- Local filesystem cache with configurable retention (defaults to keeping 2 most recent versions)
-- HTTP endpoints compatible with pacman and operational APIs for metrics and health
+### Smart Retention
+- Default: keep **2 most recent versions**
+- Configurable retention policy
+- Automatic cleanup after successful updates
 
----
+Predictable disk usage without sacrificing rollback safety.
 
-**Quick Links**
+### On-Demand Fetching
+If a requested package version is missing, Trinity-cache fetches it automatically.
 
-- Configuration: [CONFIG.md](CONFIG.md)
-- Service entrypoint: [cmd/trinity-cache/main.go](cmd/trinity-cache/main.go)
-- Cache implementation: [internal/cache](internal/cache)
+### Observability Built In
+- `/health` — service health
+- `/healthz` — service health
+- `/api/v1/stats` — operational metrics
+- `/api/v1/metrics` — Prometheus-compatible metrics
+- `/metrics` — Prometheus-compatible metrics
 
----
+## Architecture Overview
 
-**Status**: Stable prototype — ready for production evaluation. Use conservative defaults for `concurrency` and `storage_path` in production.
+Trinity-cache:
 
-## Production Checklist
+1. Selects a mirror using weighted scheduling
+2. Downloads packages concurrently  
+3. Stores artifacts in a local filesystem cache
+4. Applies retention policies  
+5. Serves packages via HTTP (pacman-compatible)  
 
-- Set `storage_path` to a persistent volume with sufficient disk space
-- Run behind a TLS reverse proxy (Nginx, Caddy, Traefik) for public access
-- Configure systemd for automatic restart and graceful shutdown
-- Enable monitoring (`/metrics`, Prometheus) and structured logging
-- Ensure regular backups of important package artifacts if needed
+Designed for deployment behind:
+
+- Any reverse proxy or load balancer like nxing, Caddy, Traefik or HaProxy
 
 ## Quickstart
+Choice between building the arch-independant binary and docker image
 
-Build locally:
-
+### Binary
+Raw binary without configuration
 ```bash
-go build ./...
-./trinity-cache --config /etc/trinity-cache/config.yaml
+make build
+./bin/trinity-cache --config ./bin/trinity-cache.yaml
 ```
 
-Run via Docker (example):
-
+### Docker
 ```bash
 make docker
-docker run --rm -v /var/lib/trinity-cache:/var/lib/trinity-cache -p 8080:8080 trinity-cache:latest --config /etc/trinity-cache/config.yaml
+docker run --rm \
+  -v /var/lib/trinity-cache:/var/lib/trinity-cache \
+  -p 8080:8080 \
+  trinity-cache:latest \
+  --config /etc/trinity-cache..yaml
 ```
 
-Systemd unit example: see [CONFIG.md](CONFIG.md#systemd-service-example)
+Systemd example available in `CONFIG.md`.
 
 ## Configuration
 
-Trinity-cache loads a YAML file described in `CONFIG.md`. Key operational knobs include:
+YAML-based configuration (see `CONFIG.md`).
 
-- `concurrency` — number of parallel downloads (default: 8)
-- `storage_path` — path to the filesystem cache (required in production)
-- `mirrors` — list of mirror URLs and base `weight` values
-- `retention.keep_versions` — how many versions to keep (default: 2)
+Key options:
+- `concurrency` — parallel downloads (default: 8)
+- `storage_path` — cache directory for storing packages
+- `mirrors` — list of mirrors with base weights
+- `retention.keep_versions` — versions to retain (default: 2)
 
-Always validate your configuration with `trinity-cache --config /path/to/config.yaml --validate` (CLI flag planned).
+## Production Deployment Guidance
 
-## Observability
+- Use persistent storage for `storage_path`
+- Run behind TLS reverse proxy
+- Restrict filesystem permissions
+- Limit network egress to trusted mirrors
+- Apply CPU/memory limits
+- Enable monitoring and structured logging
 
-- Health: `/health`
-- Operational stats: `/api/v1/stats`
-- Prometheus metrics: `/metrics` (if enabled)
+## Where Trinity-cache Fits
 
-Instrument monitoring for cache hit-rate, download success/failure, mirror selection metrics, and retention operations.
+- Enterprise Arch Linux fleets
+- CI/CD build pipelines
+- University or lab environments
+- Container clusters
+- Edge compute nodes
+- Self-hosted Arch mirrors
 
-## Security and Deployment Guidance
+## Status
 
-- Run behind TLS; terminate TLS at a reverse proxy
-- Run the service as an unprivileged user and limit access to `storage_path`
-- Restrict network egress to known mirror endpoints when possible
-- Use systemd resource limits (CPU, memory) to protect host
+Stable prototype — ready for production evaluation.
 
-## Retention & Mirror Behavior
-
-- Default retention: keep two most recent versions per package
-- Mirror selection uses effective weights and penalizes a mirror after it is used; weights recover over time
+Conservative defaults are recommended for concurrency and storage in initial deployments.
 
 ## Contributing
 
-Contributions are welcome. Please open issues for bugs or feature requests. For code changes, open a PR with tests for behavioral changes (mirror selection, retention, download logic).
+Issues and pull requests are welcome.
+
+For behavioral changes (mirror selection, retention, download logic), please include tests.
 
 ## License
-
 MIT License
-
