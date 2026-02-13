@@ -59,10 +59,9 @@ func NewHTTPServer(cache cache.CacheManager, addr string, readTimeoutSec, writeT
 	// Create HTTP server with routes
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", s.handlePacmanRequest) // Primary pacman route
-	mux.HandleFunc("/api/v1/packages/", s.handlePackageRequest)
-	mux.HandleFunc("/api/v1/fetch/", s.handleFetchRequest)
 	mux.HandleFunc("/api/v1/stats", s.handleStatsRequest)
 	mux.HandleFunc("/api/v1/metrics", s.handleMetrics)         // Prometheus format by default
+	mux.HandleFunc("/api/v1/metrics/summary", s.handleMetricsSummary) // Human-readable summary
 	mux.HandleFunc("/metrics", s.handleMetrics)                // Prometheus format (standard path)
 	mux.HandleFunc("/metrics/summary", s.handleMetricsSummary) // Human-readable summary
 	mux.HandleFunc("/health", s.handleHealth)
@@ -598,122 +597,6 @@ func copyFile(src, dst string) error {
 	return err
 }
 
-// handlePackageRequest handles GET requests for packages
-func (s *HTTPServer) handlePackageRequest(w http.ResponseWriter, r *http.Request) {
-	atomic.AddInt32(&s.activeRequests, 1)
-	defer atomic.AddInt32(&s.activeRequests, -1)
-
-	if r.Method != http.MethodGet && r.Method != http.MethodHead {
-		w.WriteHeader(http.StatusMethodNotAllowed)
-		return
-	}
-
-	// Parse package path from URL: /api/v1/packages/{name}/{version}
-	path := r.URL.Path[len("/api/v1/packages/"):]
-	if path == "" {
-		w.WriteHeader(http.StatusBadRequest)
-		if _, writeErr := fmt.Fprintf(w, `{"error":"package path required"}`); writeErr != nil {
-			logger.Warn("failed to write HTTP error response", "error", writeErr)
-		}
-		return
-	}
-
-	logger.Debug("package request", "path", path)
-
-	// For a real implementation, we'd parse name/version and serve the package
-	metrics.RecordCacheHit()
-
-	w.Header().Set("Content-Type", "application/octet-stream")
-	w.WriteHeader(http.StatusOK)
-}
-
-// handleFetchRequest handles on-demand fetch requests
-func (s *HTTPServer) handleFetchRequest(w http.ResponseWriter, r *http.Request) {
-	atomic.AddInt32(&s.activeRequests, 1)
-	defer atomic.AddInt32(&s.activeRequests, -1)
-
-	if s.fetchManager == nil {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusServiceUnavailable)
-		if _, writeErr := fmt.Fprintf(w, `{"error":"fetch manager not available"}`); writeErr != nil {
-			logger.Warn("failed to write HTTP error response", "error", writeErr)
-		}
-		return
-	}
-
-	if r.Method != http.MethodPost && r.Method != http.MethodGet {
-		w.WriteHeader(http.StatusMethodNotAllowed)
-		return
-	}
-
-	// Parse fetch request: /api/v1/fetch/{name}/{version}
-	path := r.URL.Path[len("/api/v1/fetch/"):]
-	if path == "" {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusBadRequest)
-		if _, writeErr := fmt.Fprintf(w, `{"error":"package name and version required"}`); writeErr != nil {
-			logger.Warn("failed to write HTTP error response", "error", writeErr)
-		}
-		return
-	}
-
-	parts := strings.Split(path, "/")
-	if len(parts) < 2 {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusBadRequest)
-		if _, writeErr := fmt.Fprintf(w, `{"error":"invalid package path"}`); writeErr != nil {
-			logger.Warn("failed to write HTTP error response", "error", writeErr)
-		}
-
-		return
-	}
-
-	name := parts[0]
-	version := parts[1]
-
-	if name == "" || version == "" {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusBadRequest)
-		if _, writeErr := fmt.Fprintf(w, `{"error":"name and version required"}`); writeErr != nil {
-			logger.Warn("failed to write HTTP error response", "error", writeErr)
-		}
-
-		return
-	}
-
-	logger.Info("on-demand fetch requested", "name", name, "version", version)
-
-	// For a real implementation, we'd construct the package path based on storage configuration
-	pkgPath := fmt.Sprintf("/cache/%s/%s-%s.pkg", name, name, version)
-
-	// Fetch the package
-	result, err := s.fetchManager.FetchVersion(name, version, pkgPath)
-	if err != nil {
-		logger.Error("on-demand fetch failed", "name", name, "version", version, "error", err)
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusInternalServerError)
-		if _, writeErr := fmt.Fprintf(w, `{"error":"fetch failed: %s"}`, err.Error()); writeErr != nil {
-			logger.Warn("failed to write HTTP error response", "error", writeErr)
-		}
-
-		return
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	if err := json.NewEncoder(w).Encode(map[string]interface{}{
-		"name":      name,
-		"version":   version,
-		"size":      result.Size,
-		"checksum":  result.Checksum,
-		"path":      result.Path,
-		"timestamp": time.Now(),
-	}); err != nil {
-		logger.Warn("failed to encode HTTP response", "error", err)
-	}
-
-}
-
 // handleStatsRequest returns cache statistics
 func (s *HTTPServer) handleStatsRequest(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
@@ -790,14 +673,14 @@ func (s *HTTPServer) handleMetrics(w http.ResponseWriter, r *http.Request) {
 
 	// Check for format query parameter
 	format := r.URL.Query().Get("format")
-	if format == "" {
-		// Check Accept header for prometheus format
-		acceptHeader := r.Header.Get("Accept")
-		if strings.Contains(acceptHeader, "application/vnd.google.protobuf") ||
-			strings.Contains(acceptHeader, "text/plain") {
-			format = "prometheus"
-		}
-	}
+	// if format == "" {
+	// 	// Check Accept header for prometheus format
+	// 	acceptHeader := r.Header.Get("Accept")
+	// 	if strings.Contains(acceptHeader, "application/vnd.google.protobuf") ||
+	// 		strings.Contains(acceptHeader, "text/plain") {
+	// 		format = "prometheus"
+	// 	}
+	// }
 
 	// Default to prometheus format
 	if format == "" {
@@ -808,7 +691,7 @@ func (s *HTTPServer) handleMetrics(w http.ResponseWriter, r *http.Request) {
 		// Return JSON format for backward compatibility
 		metricsData := metrics.GetMetricsJSON()
 		w.Header().Set("Content-Type", "application/json")
-		// json.NewEncoder(w).Encode(metricsData)
+		json.NewEncoder(w).Encode(metricsData)
 		if err := json.NewEncoder(w).Encode(metricsData); err != nil {
 			logger.Warn("failed to encode HTTP response", "error", err)
 		}
