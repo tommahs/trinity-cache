@@ -16,7 +16,8 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v6
         with:
-          go-version: '1.24'
+          go-version-file: go.mod
+          check-latest: true
 
       - name: Check for dependency updates
         run: |
