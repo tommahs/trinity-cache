@@ -60,10 +60,10 @@ func NewHTTPServer(cache cache.CacheManager, addr string, readTimeoutSec, writeT
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", s.handlePacmanRequest) // Primary pacman route
 	mux.HandleFunc("/api/v1/stats", s.handleStatsRequest)
-	mux.HandleFunc("/api/v1/metrics", s.handleMetrics)         // Prometheus format by default
+	mux.HandleFunc("/api/v1/metrics", s.handleMetrics)                // Prometheus format by default
 	mux.HandleFunc("/api/v1/metrics/summary", s.handleMetricsSummary) // Human-readable summary
-	mux.HandleFunc("/metrics", s.handleMetrics)                // Prometheus format (standard path)
-	mux.HandleFunc("/metrics/summary", s.handleMetricsSummary) // Human-readable summary
+	mux.HandleFunc("/metrics", s.handleMetrics)                       // Prometheus format (standard path)
+	mux.HandleFunc("/metrics/summary", s.handleMetricsSummary)        // Human-readable summary
 	mux.HandleFunc("/health", s.handleHealth)
 	mux.HandleFunc("/healthz", s.handleHealth) // Kubernetes-compatible health endpoint
 
@@ -691,7 +691,7 @@ func (s *HTTPServer) handleMetrics(w http.ResponseWriter, r *http.Request) {
 		// Return JSON format for backward compatibility
 		metricsData := metrics.GetMetricsJSON()
 		w.Header().Set("Content-Type", "application/json")
-		
+
 		if err := json.NewEncoder(w).Encode(metricsData); err != nil {
 			logger.Warn("failed to encode HTTP response", "error", err)
 		}
