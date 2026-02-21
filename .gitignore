@@ -43,3 +43,6 @@ coverage.out
 *.coverprofile
 *.test
 
+# docker volumes
+/data/
+

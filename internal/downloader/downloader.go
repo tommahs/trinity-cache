@@ -1,11 +1,13 @@
+// Package downloader implements the interface for downloading packages.
 package downloader
 
 import "github.com/tommahs/trinity-cache/internal/mirror"
 
 // Result represents the outcome of a download operation.
 type Result struct {
-	Path string
-	Size int64
+	Path     string
+	Size     int64
+	Checksum string // SHA256 checksum of the file
 }
 
 // Downloader downloads packages from a given mirror.

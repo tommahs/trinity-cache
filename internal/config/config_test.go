@@ -170,6 +170,33 @@ func TestDefault(t *testing.T) {
 	if len(cfg.Mirrors) != 0 {
 		t.Errorf("Default mirrors count = %d, want 0", len(cfg.Mirrors))
 	}
+	if cfg.Server.Port != ":8080" {
+		t.Errorf("Default server port = %s, want :8080", cfg.Server.Port)
+	}
+	if cfg.Server.ReadTimeout != 30 {
+		t.Errorf("Default server read timeout = %d, want 30", cfg.Server.ReadTimeout)
+	}
+	if cfg.Server.WriteTimeout != 30 {
+		t.Errorf("Default server write timeout = %d, want 30", cfg.Server.WriteTimeout)
+	}
+	if cfg.Retention.KeepVersions != 2 {
+		t.Errorf("Default retention keep versions = %d, want 2", cfg.Retention.KeepVersions)
+	}
+	if cfg.Retention.EnforcementInterval != 1.0 {
+		t.Errorf("Default retention enforcement interval = %v, want 1.0", cfg.Retention.EnforcementInterval)
+	}
+	if cfg.MirrorRecovery.Interval != 5 {
+		t.Errorf("Default mirror recovery interval = %d, want 5", cfg.MirrorRecovery.Interval)
+	}
+	if cfg.MirrorRecovery.Rate != 0.05 {
+		t.Errorf("Default mirror recovery rate = %v, want 0.05", cfg.MirrorRecovery.Rate)
+	}
+	if cfg.Downloads.MaxRetries != 3 {
+		t.Errorf("Default downloads max retries = %d, want 3", cfg.Downloads.MaxRetries)
+	}
+	if cfg.Downloads.Timeout != 30 {
+		t.Errorf("Default downloads timeout = %d, want 30", cfg.Downloads.Timeout)
+	}
 }
 
 func TestLoadWithDefaults(t *testing.T) {

@@ -1,310 +1,137 @@
 # Trinity-cache
+[![CI](https://img.shields.io/github/actions/workflow/status/tommahs/trinity-cache/ci.yml?branch=main&label=CI&style=flat-square)](https://github.com/tommahs/trinity-cache/actions)
+[![Release](https://img.shields.io/github/v/release/tommahs/trinity-cache?style=flat-square)](https://github.com/tommahs/trinity-cache/releases)
+[![Go](https://img.shields.io/badge/go-1.25-blue?style=flat-square)](https://golang.org)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green?style=flat-square)](LICENSE)
 
-Trinity-cache is a Go-based system for fetching, caching, and serving Arch Linux packages.
+**Trinity-cache** is a high-performance Go service for fetching, caching, and serving Arch Linux packages from upstream mirrors.
 
-At its core, it downloads packages from Arch Linux mirrors using **concurrent HTTP downloads** and **dynamic mirror weighting** to distribute load fairly across mirrors. Beyond downloading, Trinity-cache maintains a local package cache, keeps recent versions, and serves packages on demand.
+It combines intelligent mirror scheduling, concurrent downloads, and controlled retention into a lightweight package distribution layer designed for real-world infrastructure.
 
-The project is designed to grow into a lightweight, intelligent package distribution layer rather than a single-purpose downloader.
+## Why Trinity-cache?
 
----
+If you run multiple Arch Linux systems — whether in CI, labs, clusters, or enterprise environments — you’ve likely encountered:
 
-## Project Scope
+- Repeated downloads of identical packages
+- Uneven upstream mirror performance
+- Rate limited or slow mirror responses
+- Lack of visibility into package distribution
+- Uncontrolled disk growth from naive caching
 
-Trinity-cache aims to:
+Trinity-cache sits between your infrastructure and upstream mirrors, acting as:
 
-- Download the latest Arch Linux packages from upstream mirrors
-- Cache packages locally
-- Retain the **two most recent versions** of each package
-- Serve cached packages to clients
-- Fetch newer versions automatically when requested
-- Distribute mirror usage dynamically to avoid overloading any single mirror
+- A performance accelerator  
+- A fair mirror load distributor  
+- A controlled local package cache  
+- An observable package gateway 
 
----
+It is not just a downloader — it is a smart edge for package distribution.
 
-## Features
+## Core Capabilities
 
-- ⚡ Concurrent package downloads over HTTP
-- 🪞 Mirror-aware fetching with dynamic weight adjustment
-- 🔄 Actively rotates mirrors by penalizing recently used ones
-- 📦 Local package cache with version tracking
-- 🕒 Keeps the two most recent versions of each package
-- 📡 On-demand fetching when a newer version is requested
-- 📄 YAML-based configuration
-- 🚀 Written in Go for performance and simplicity
+### Concurrent Download Engine
+High-performance worker pool for parallel HTTP downloads.
 
----
+### Intelligent Mirror Scheduling
+- Mirrors have configurable base weights  
+- Effective weights dynamically adjust  
+- Recently used mirrors are temporarily penalized  
+- Weights recover over time  
 
-## Design Philosophy
+This prevents repeatedly hammering a single mirror and distributes load fairly.
 
-Trinity-cache is built around three core principles:
+### Smart Retention
+- Default: keep **2 most recent versions**
+- Configurable retention policy
+- Automatic cleanup after successful updates
 
-1. **Efficiency**  
-   Use concurrency and intelligent scheduling to maximize throughput.
+Predictable disk usage without sacrificing rollback safety.
 
-2. **Fairness**  
-   Prevent hammering individual mirrors by dynamically adjusting mirror priority after each use.
+### On-Demand Fetching
+If a requested package version is missing, Trinity-cache fetches it automatically.
 
-3. **Self-sufficiency**  
-   Serve packages locally whenever possible and fetch upstream only when needed.
+### Observability Built In
+- `/health` — service health
+- `/healthz` — service health
+- `/api/v1/stats` — operational metrics
+- `/api/v1/metrics` — Prometheus-compatible metrics
+- `/metrics` — Prometheus-compatible metrics
 
----
+## Architecture Overview
 
-## How It Works (High-Level)
+Trinity-cache:
 
-- Mirrors are defined with initial base weights.
-- A scheduler selects mirrors for downloads based on their current effective weight.
-- When a mirror is used, its weight is temporarily reduced to promote selection of other mirrors.
-- Package metadata and versions are tracked locally.
-- For each package:
-  - The latest available version is downloaded if not present.
-  - The two most recent versions are retained.
-  - Older versions are removed.
-- When a client requests a package:
-  - If the requested version is cached, it is served locally.
-  - If the requested version is newer than the cached version, Trinity-cache downloads it and updates the cache.
+1. Selects a mirror using weighted scheduling
+2. Downloads packages concurrently  
+3. Stores artifacts in a local filesystem cache
+4. Applies retention policies  
+5. Serves packages via HTTP (pacman-compatible)  
 
----
+Designed for deployment behind:
 
-## Mirror Model
+- Any reverse proxy or load balancer like nxing, Caddy, Traefik or HaProxy
 
-Trinity-cache implements a **dynamic mirror scheduling model** that tracks multiple aspects of each mirror to make intelligent selection decisions.
+## Quickstart
+Choice between building the arch-independant binary and docker image
 
-### Mirror State Tracking
-
-Each mirror maintains the following state:
-
-- **Base Weight**: The initial weight configured in YAML. This value remains constant and serves as the baseline preference.
-- **Effective Weight**: The current weight dynamically adjusted at runtime. When a mirror is used, its effective weight is reduced (penalized) to discourage repeated use and promote load distribution across other mirrors.
-- **Recent Usage**: Tracked via a `LastUsed` timestamp, allowing the system to understand recent mirror activity patterns.
-- **In-Flight Downloads**: A counter of concurrent downloads currently using this mirror. This helps avoid overloading mirrors with too many simultaneous requests.
-
-### Mirror Selector
-
-The `Selector` interface defines the contract for mirror selection:
-
-```go
-// Select returns the best candidate mirror for the next download
-Select() (*Mirror, error)
-
-// Penalize reduces the effective weight of a mirror after use
-Penalize(m *Mirror, penalty float64)
-
-// Add registers a new mirror with the selector
-Add(m *Mirror)
-
-// List returns the currently known mirrors
-List() []*Mirror
+### Binary
+Raw binary without configuration
+```bash
+make build
+./bin/trinity-cache --config ./bin/trinity-cache.yaml
 ```
 
-Trinity-cache provides a `WeightedSelector` implementation that uses a **sophisticated scoring algorithm** to select mirrors based on three factors:
-
-#### Selection Algorithm
-
-The algorithm scores each mirror and selects the one with the highest score:
-
+### Docker
+```bash
+make docker
+docker run --rm \
+  -v /var/lib/trinity-cache:/var/lib/trinity-cache \
+  -p 8080:8080 \
+  trinity-cache:latest \
+  --config /etc/trinity-cache..yaml
 ```
-score = EffectiveWeight × (1 + timeSinceLastUseBoost) / (1 + inFlightPenalty)
-```
 
-**Scoring Factors:**
-
-1. **Effective Weight** (primary factor)  
-   - Mirrors with higher effective weights are preferred, respecting configuration priorities
-   - Mirrors with zero or negative weight are never selected
-
-2. **Time Since Last Use** (secondary factor)  
-   - Unused mirrors get a boost: `timeSinceLastUseBoost = log(1 + secondsSinceLastUse / 3600)`
-   - This naturally prefers less-recently-used mirrors when weights are similar
-   - Example boost values: 1 hour unused → 0.69 boost; 10 hours unused → 0.89 boost; never used → 0 boost (but still preferred)
-
-3. **In-Flight Downloads** (tertiary factor)  
-   - Mirrors with many concurrent downloads are penalized: `inFlightPenalty = inFlightCount × 0.01`
-   - This prevents overloading mirrors that are already handling many requests
-   - Example penalties: 0 downloads → 0; 5 downloads → 0.05; 10+ downloads → 0.1+
-
-**Key Properties:**
-
-- **Fair Distribution**: Prefers less-used mirrors when available, avoiding overuse of high-priority mirrors
-- **Priority Respect**: Still respects configured base weights and effective weights
-- **Load Awareness**: Avoids selecting mirrors with many in-flight downloads
-- **Robust**: Never selects mirrors with non-positive weights
-
-#### Penalization
-
-After a mirror is used, its effective weight is reduced (penalized) to discourage repeated selection:
-
-- The weight is penalized by a configurable amount (reduces effective weight)
-- The weight never goes below zero
-- The `LastUsed` timestamp is updated to the current time
-- Over time, effective weights recover through separate reconciliation logic
-
-#### Workflow Example
-
-1. Three mirrors are configured:
-   - Mirror A: base weight 2.0, effective weight 2.0, never used
-   - Mirror B: base weight 1.0, effective weight 1.0, last used 2 hours ago
-   - Mirror C: base weight 1.5, effective weight 1.5, actively handling 10 downloads
-
-2. `Selector.Select()` scores all mirrors:
-   - Mirror A: 2.0 × (1 + 0) / (1 + 0) = 2.0 (never used, no penalty)
-   - Mirror B: 1.0 × (1 + 0.405) / (1 + 0) ≈ 1.405 (2h unused gives boost)
-   - Mirror C: 1.5 × (1 + 0) / (1 + 0.1) ≈ 1.364 (penalized by in-flight downloads)
-
-3. Mirror A is selected (highest score: 2.0)
-
-4. After use:
-   - In-flight counter for Mirror A is incremented
-   - Later, `Selector.Penalize(Mirror A, 0.8)` reduces effective weight to 1.2
-   - `LastUsed` timestamp is updated
-
-5. Next selection round prefers Mirror B or C due to Mirror A's reduced weight
-
-This algorithm ensures **balanced load distribution** while maintaining **fair access** to high-priority mirrors and **avoiding overload** of any single mirror.
-
----
+Systemd example available in `CONFIG.md`.
 
 ## Configuration
 
-Trinity-cache uses a YAML configuration file.
+YAML-based configuration (see `CONFIG.md`).
 
-## Configuration Schema
+Key options:
+- `concurrency` — parallel downloads (default: 8)
+- `storage_path` — cache directory for storing packages
+- `mirrors` — list of mirrors with base weights
+- `retention.keep_versions` — versions to retain (default: 2)
 
-Trinity-cache uses a formal configuration schema with validation for all parameters.
+## Production Deployment Guidance
 
-### Configuration Options
+- Use persistent storage for `storage_path`
+- Run behind TLS reverse proxy
+- Restrict filesystem permissions
+- Limit network egress to trusted mirrors
+- Apply CPU/memory limits
+- Enable monitoring and structured logging
 
-| Key | Type | Required | Default | Description |
-|-----|------|----------|---------|-------------|
-| `concurrency` | integer | Optional | 8 | Maximum number of concurrent downloads. Must be between 1 and 10000. |
-| `storage_path` | string | Required | - | File system path where cached packages are stored. |
-| `log_level` | string | Optional | info | Logging verbosity level. One of: `debug`, `info`, `warn`, `error`. |
-| `mirrors` | array | Required | - | List of mirror definitions (at least one required). |
-| `mirrors[].url` | string | Required | - | Base URL of an Arch Linux mirror. |
-| `mirrors[].weight` | float | Optional | 1.0 | Initial base weight for the mirror. Must be positive. This value is dynamically adjusted at runtime based on mirror usage. |
+## Where Trinity-cache Fits
 
-### Validation Rules
+- Enterprise Arch Linux fleets
+- CI/CD build pipelines
+- University or lab environments
+- Container clusters
+- Edge compute nodes
+- Self-hosted Arch mirrors
 
-All configuration values are validated on load:
+## Status
 
-- **concurrency**: Must be a positive integer ≤ 10000
-- **storage_path**: Cannot be empty; must be provided or uses default
-- **log_level**: Must be one of `debug`, `info`, `warn`, or `error`; defaults to `info` if not specified
-- **mirrors**: At least one mirror is required
-- **mirrors[].url**: Cannot be empty for any mirror
-- **mirrors[].weight**: Must be positive (> 0); defaults to 1.0 if not specified
+Stable prototype — ready for production evaluation.
 
-### Example Configuration
+Conservative defaults are recommended for concurrency and storage in initial deployments.
 
-```yaml
-concurrency: 8                           # Use up to 8 concurrent connections
-storage_path: "/var/lib/trinity-cache"   # Store packages here
-log_level: "info"                        # Log level: debug, info, warn, error
+## Contributing
 
-mirrors:
-  - url: "https://mirror1.archlinux.org"
-    weight: 1.0
+Issues and pull requests are welcome.
 
-  - url: "https://mirror2.archlinux.org"
-    weight: 1.0
+For behavioral changes (mirror selection, retention, download logic), please include tests.
 
-  - url: "https://mirror3.archlinux.org"
-    weight: 1.5                         # Higher initial weight
-```
-
-## Logging
-
-Trinity-cache provides **structured logging** based on Go's standard `log/slog` library. The philosophy follows Go's pragmatic approach: simple, explicit, and focused on what matters.
-
-### Log Levels
-
-The `log_level` configuration option controls verbosity (default: "info"):
-
-- **debug**: Detailed diagnostic information for troubleshooting.
-- **info**: Application startup, significant operations, and notable events.
-- **warn**: Recoverable issues and temporary failures.
-- **error**: Operation failures and serious problems.
-
-### Log Output
-
-Trinity-cache logs events as structured text. Each log entry includes a timestamp, level, message, and relevant attributes:
-
-```
-time=2026-02-08T10:15:22Z level=INFO msg="Trinity-cache started" version=0.1.0 concurrency=8 storage=/var/lib/trinity-cache mirrors=3
-time=2026-02-08T10:15:23Z level=ERROR msg="no mirrors configured"
-```
-
-### Logging Philosophy
-
-Following Go's ethos:
-- **Explicit errors**: Operations return errors; failures are not silently logged and swallowed.
-- **Minimal logging**: Log significant events and failures, not every internal detail.
-- **Standard library**: Uses Go's standard `log/slog` without external dependencies.
-- **Pragmatic**: Logging serves debugging and operations; unnecessary verbosity is avoided.
-
-### Logger API
-
-The logger package provides simple functions for structured logging:
-
-```go
-// Configure log level during startup
-logger.SetLevel(logger.ParseLevel(cfg.LogLevel))
-
-// Log messages at different levels
-logger.Debug("detailed diagnostic info", "key", value)
-logger.Info("significant event", "operation", "cache_loaded")
-logger.Warn("recoverable issue", "retry", 3)
-logger.Error("operation failed", "error", err)
-
-// Create a contextual logger with pre-set fields
-ctxLogger := logger.With("component", "downloader", "mirror", mirrorURL)
-ctxLogger.Info("download started")
-```
-
-**Functions:**
-- `SetLevel(level)` — Configure the log level (call during startup after config loads)
-- `ParseLevel(s string)` — Parse "debug", "info", "warn", "error" from config string
-- `Debug(msg, args...)` — Log at debug level
-- `Info(msg, args...)` — Log at info level
-- `Warn(msg, args...)` — Log at warn level
-- `Error(msg, args...)` — Log at error level
-- `With(args...)` — Return a contextual logger with pre-set key-value pairs
-Trinity-cache is intended to expose a local package-serving interface (e.g. HTTP).
-Clients can request packages normally. Trinity-cache will:
-1. Serve the package from cache if available.
-2. Fetch the package from upstream mirrors if a newer version is required.
-3. Update the local cache and enforce version retention rules.
-
-## Usage
-
-🚧 Trinity-cache is under active development.
-
-Planned usage:
-```
-trinity-cache --config config.yaml
-```
-
-Local build and run (developer):
-
-```bash
-# build
-go build ./...
-
-# build and run docker image
-make docker
-docker run --rm trinity-cache:dev --version
-```
-
-# Why “Trinity-cache”?
-The name reflects the three pillars of the project:
-- Concurrent fetching
-- Dynamic mirror scheduling
-- Local package serving
-Together, they form a balanced and adaptive downloader.
-
-# Status
-This project is experimental and under active development.
-Interfaces, configuration, and behavior may change.
-
-# License
-
+## License
 MIT License
