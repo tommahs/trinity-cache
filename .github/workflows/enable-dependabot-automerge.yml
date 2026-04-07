@@ -6,7 +6,7 @@ on:
 
 permissions:
   pull-requests: write
-
+  contents: write
 jobs:
   enable-automerge:
     # Only run for Dependabot PRs that include the `automerge` label
