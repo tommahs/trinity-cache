@@ -72,7 +72,7 @@ Designed for deployment behind:
 - Any reverse proxy or load balancer like nxing, Caddy, Traefik or HaProxy
 
 ## Quickstart
-Choice between building the arch-independant binary and docker image
+Choice between building the arch-independent binary and docker image
 
 ### Binary
 Raw binary without configuration
