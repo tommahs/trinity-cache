@@ -1,5 +1,6 @@
 .git
 .github
+.vscode
 **/vendor
 **/*.tar.gz
 **/*.tgz
