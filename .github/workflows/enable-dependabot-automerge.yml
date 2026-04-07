@@ -4,6 +4,9 @@ on:
   pull_request_target:
     types: [opened, reopened, labeled, synchronize]
 
+permissions:
+  pull-requests: write
+
 jobs:
   enable-automerge:
     # Only run for Dependabot PRs that include the `automerge` label
