@@ -17,8 +17,8 @@ jobs:
             
             // Check PR title format: type(scope): description
             const validFormats = [
-              /^(feat|fix|docs|style|refactor|perf|test|chore)(\(.+\))?: .+/i,
-              /^(feat|fix|bugfix|feature|enhancement|improvement): .+/i,
+              /^(feat|fix|docs|build|style|refactor|perf|test|chore)(\(.+\))?: .+/i,
+              /^(feat|fix|bugfix|build|feature|enhancement|improvement): .+/i,
             ];
             
             const isValid = validFormats.some(format => format.test(title));
