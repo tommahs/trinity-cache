@@ -14,6 +14,13 @@ jobs:
           script: |
             const pr = context.payload.pull_request;
             const title = pr.title;
+            const author = pr.user.login;
+            
+            // Skip validation for Dependabot PRs
+            if (author === 'dependabot[bot]') {
+              console.log('✅ Skipping validation for Dependabot PR');
+              return;
+            }
             
             // Check PR title format: type(scope): description
             const validFormats = [
