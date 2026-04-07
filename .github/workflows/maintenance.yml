@@ -63,7 +63,7 @@ jobs:
           output-file: sbom.spdx.json
 
       - name: Upload SBOM
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: sbom
           path: sbom.spdx.json
@@ -87,7 +87,7 @@ jobs:
           echo "License report generated"
 
       - name: Upload licenses report
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: licenses
           path: licenses.csv
