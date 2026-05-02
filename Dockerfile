@@ -23,15 +23,9 @@ RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
       -o /trinity-cache \
       ./cmd/trinity-cache
 
-
 # -------- Final --------
 FROM scratch
 
-USER 0
-# Ensuring /tmp and /etc/ssl/certs exists
-RUN mkdir -p /tmp /etc/ssl/certs && chmod 1777 /tmp
-
-# Copy CA certificates (needed if you make HTTPS calls)
 COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
 
 # Copy binary
