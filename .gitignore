@@ -45,5 +45,5 @@ coverage.out
 *.test
 
 # docker volumes
-/data/
+/data
 
