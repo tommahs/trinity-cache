@@ -23,17 +23,16 @@ RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
       -o /trinity-cache \
       ./cmd/trinity-cache
 
-
 # -------- Final --------
 FROM scratch
 
-# Run as distroless user
-USER 65532:65532
-
-# Copy CA certificates (needed if you make HTTPS calls)
 COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
 
 # Copy binary
 COPY --from=builder /trinity-cache /trinity-cache
+
+# Run as distroless user
+USER 65532:65532
+
 
 ENTRYPOINT ["/trinity-cache"]
